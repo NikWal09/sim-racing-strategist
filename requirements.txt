@@ -1,0 +1,10 @@
+salsa20>=0.3.0
+pyttsx3>=2.90
+PyYAML>=6.0
+
+# Opcjonalnie: neuronowe glosy edge-tts (speech.engine: "edge").
+# Wymagane tylko jesli chcesz uzywac glosow online zamiast SAPI.
+edge-tts>=6.1.0
+sounddevice>=0.4.6
+miniaudio>=1.59
+numpy>=1.24

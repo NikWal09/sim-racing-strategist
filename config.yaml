@@ -1,0 +1,74 @@
+# Konfiguracja GT7 Race Engineer
+# ---------------------------------
+
+telemetry:
+  # IP konsoli PlayStation w sieci LAN (ta, na ktorej dziala GT7).
+  # Przy Remote Play gra dalej dziala na konsoli - podaj IP konsoli, nie PC.
+  # Sprawdzisz je w PS: Ustawienia -> Siec -> Stan polaczenia -> Adres IP.
+  playstation_ip: "192.168.1.14"
+  send_port: 33739      # port, na ktory wysylamy heartbeat do konsoli
+  receive_port: 33740   # port, na ktorym odbieramy pakiety telemetrii
+  heartbeat_every: 100  # co ile pakietow ponowic heartbeat (konsola zwykle tnie po ~100)
+  packet_format: "~"    # ktory format telemetrii zamawiac od GT7:
+                        #   "A" - 296B, podstawowy (paliwo, czasy, opony, pozycja) - DOMYSLNY
+                        #   "B" - 316B, + ruch nadwozia (kat kierownicy, sway/heave/surge)
+                        #   "~" - 344B, + surowy gaz/hamulec (widac TCS/ABS) i odzysk energii
+                        # Uwaga: po zmianie formatu zatrzymaj GT7 (wyjdz z trybu jazdy) na
+                        # chwile, bo konsola pamieta pierwszy format do wygasniecia heartbeatu.
+
+engineer:
+  # Pojemnosc zbiornika jest czytana z telemetrii, ale mozesz wymusic margines.
+  fuel_warning_laps: 3.0       # ostrzezenie, gdy paliwa zostaje na tyle (lub mniej) okrazen
+  fuel_critical_laps: 1.5      # alarm krytyczny
+  pit_window_laps: 2.0         # info "okno pit-stopu" gdy paliwa na tyle okrazen
+  min_laps_for_fuel_calc: 1    # ile okrazen trzeba przejechac, zanim liczymy zuzycie
+
+  tyre_temp_warning: 110.0     # st. C - ostrzezenie o przegrzanych oponach
+  announce_lap_times: true     # czytaj czas po kazdym okrazeniu
+  announce_position_changes: true
+  announce_best_lap: true
+
+  # Strategia paliwowa: czy paliwa starczy do mety, do ktorego okrazenia,
+  # ile oszczedzac na okrazenie i ile procent dotankowac na pit stopie.
+  announce_fuel_strategy: true
+  fuel_target_margin_laps: 0.5     # zapas paliwa na koniec wyscigu (w okrazeniach)
+
+  # Auto-uczenie sekcji toru: asystent dzieli okrazenie na sekcje wg pokonanego
+  # dystansu i uczy sie, w ktorej opony grzeja sie najmocniej (ryzyko przegrzania
+  # i szybszego zuzycia). Dziala na dowolnym torze, bez nazw zakretow.
+  announce_tyre_sections: true
+  tyre_sections: 12                # na ile sekcji dzielimy okrazenie
+  tyre_section_temp_warning: 95.0  # od jakiej temp. [C] raportowac goraca sekcje
+
+  # Delta do najlepszego okrazenia: ile czasu tracisz/zyskujesz wzgledem swojego
+  # najszybszego kolka. Liczona z telemetrii (calkowanie predkosci -> dystans,
+  # interpolacja czasu referencyjnego). Czytana TYLKO na prostej, zeby nie
+  # rozpraszac w zakretach. Dziala na dowolnym torze, bez map.
+  announce_delta: true
+  delta_min_seconds: 0.15          # ponizej tej delty [s] nie raportujemy (szum)
+
+speech:
+  enabled: true
+  rate: 175             # tempo mowy (slowa/min). Inzynier mowi rzeczowo, nie za wolno.
+  volume: 1.0           # 0.0 - 1.0
+  voice_substring: ""   # fragment nazwy glosu SAPI do wymuszenia (np. "Paulina", "Zosia").
+                        # Pusty = glos domyslny systemu. Lista glosow: python -m gt7_engineer.speech.speaker --list
+  output_device: "CABLE Input"    # fragment nazwy urzadzenia WYJSCIA audio dla glosu inzyniera.
+                        # Pusty = domyslne glosniki. Wpisz np. "CABLE", by skierowac glos
+                        # na wirtualny kabel (mikrofon Discorda) i slyszec inzyniera na PS5.
+                        # Lista urzadzen: python main.py --list-outputs
+  language: "pl"        # jezyk komunikatow: "pl" (polski) lub "en" (angielski).
+                        # Dla "en" wybierz tez angielski glos przez voice_substring.
+  min_gap_seconds: 1.5  # minimalna przerwa miedzy komunikatami tego samego typu (anti-spam)
+
+  engine: "sapi"        # silnik glosu: "sapi" (offline, Windows) lub "edge" (neuronowy, online).
+                        #   sapi  - glosy systemowe (pyttsx3/SAPI5), dziala bez internetu.
+                        #   edge  - neuronowe glosy Microsoft (edge-tts), najlepsza jakosc,
+                        #           wymaga internetu i: pip install edge-tts sounddevice miniaudio numpy
+  edge_voice: ""        # glos dla engine="edge", np. "pl-PL-MarekNeural", "pl-PL-ZofiaNeural",
+                        # "en-US-AriaNeural". Pusty = domyslny dla jezyka (pl -> Marek, en -> Aria).
+                        # Pelna lista glosow: python tools/voice_demo.py --list-edge pl
+
+debug:
+  print_telemetry: true   # wypisuj surowe dane co pakiet (do diagnostyki)
+  log_events: true         # loguj zdarzenia inzyniera na konsole
