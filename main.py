@@ -18,9 +18,11 @@ import argparse
 import sys
 import time
 
+import os
+
 from gt7_engineer.config import Config
-from gt7_engineer.engineer import RaceEngineer
-from gt7_engineer.speech import Speaker
+from gt7_engineer.engineer import RaceEngineer, TelemetryRecorder
+from gt7_engineer.speech import Speaker, radio_beep
 from gt7_engineer.telemetry import GT7Listener
 
 
@@ -77,6 +79,12 @@ def main() -> int:
     speaker.start()
 
     engineer = RaceEngineer(cfg.engineer, language=cfg.speech.language)
+    # Nagrywanie telemetrii per-okrazenie (Garage 61). base_dir = folder projektu.
+    recorder = TelemetryRecorder(cfg.recording, base_dir=os.path.dirname(os.path.abspath(__file__)))
+
+    # Sygnal startowy jak w CrewChief: krotki beep radiowy + "radio check".
+    radio_beep(output_device=cfg.speech.output_device)
+    speaker.say(engineer.M.radio_check(), key="radio_check", min_gap=0)
 
     print("=" * 60)
     print("  GT7 RACE ENGINEER")
@@ -116,6 +124,15 @@ def main() -> int:
                     spoken = speaker.say(ann.text, ann.priority, key=ann.key, min_gap=ann.min_gap)
                     if not spoken and not cfg.speech.enabled and not cfg.debug.log_events:
                         print(f"[ENG] {ann.text}")
+
+                # Diagnostyka paliwa: tylko do logu (bez glosu).
+                for line in engineer.pop_fuel_debug():
+                    if cfg.debug.log_events:
+                        print(line)
+
+                saved = recorder.update(packet)
+                if saved and cfg.debug.log_events:
+                    print(f"[NAGRYWANIE] Zapisano okrazenie: {os.path.basename(saved)}")
     except KeyboardInterrupt:
         print("\nKonczenie pracy inzyniera. Do zobaczenia na torze!")
     finally:

@@ -58,7 +58,8 @@ def _build_samples(M):
         ("Strata pozycji / Lost position", lambda: M.lost_position(5)),
         ("Ostatnie okrążenie / Last lap", lambda: M.last_lap()),
         ("Gorąca opona / Tyre hot", lambda: M.tyre_hot(rr, 112.0)),
-        ("Gorąca sekcja toru / Tyre section", lambda: M.tyre_section_hot(7, 12, rr, 128.0)),
+        ("Gorący zakręt / Corner tyre hot", lambda: M.tyre_corner_hot(3, rr, 122.0)),
+        ("Najgorętszy zakręt / Worst corner", lambda: M.tyre_corner_worst(7, rr, 128.0)),
         ("Meta / Finished", lambda: M.finished(1, 16)),
         ("Pozycja / Position", lambda: M.position(4, 16)),
     ]

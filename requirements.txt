@@ -8,3 +8,7 @@ edge-tts>=6.1.0
 sounddevice>=0.4.6
 miniaudio>=1.59
 numpy>=1.24
+
+# Opcjonalnie: nowoczesne GUI desktopowe (python gt7_gui_qt.py).
+# GUI Tkinter (python gt7_gui.py) dziala bez tej zaleznosci.
+PySide6>=6.6.0

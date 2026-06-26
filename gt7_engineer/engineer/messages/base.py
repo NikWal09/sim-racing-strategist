@@ -31,6 +31,9 @@ class Messages:
         raise NotImplementedError
 
     # --- Komunikaty ---
+    def radio_check(self) -> str:  # pragma: no cover
+        raise NotImplementedError
+
     def connected(self) -> str:  # pragma: no cover
         raise NotImplementedError
 
@@ -79,10 +82,26 @@ class Messages:
     def delta_behind(self, seconds: float) -> str:  # pragma: no cover
         raise NotImplementedError
 
+    def ref_sector_loss(self, sector: int, seconds: float) -> str:  # pragma: no cover
+        """Strata czasu do okrazenia referencyjnego w danym sektorze."""
+        raise NotImplementedError
+
+    def ref_sector_gain(self, sector: int, seconds: float) -> str:  # pragma: no cover
+        """Zysk do okrazenia referencyjnego w danym sektorze."""
+        raise NotImplementedError
+
     def tyre_hot(self, corner: str, temp: float) -> str:  # pragma: no cover
         raise NotImplementedError
 
     def tyre_section_hot(self, section: int, total: int, corner: str, temp: float) -> str:  # pragma: no cover
+        raise NotImplementedError
+
+    def tyre_corner_hot(self, corner_no: int, tyre: str, temp: float) -> str:  # pragma: no cover
+        """Feedback na biezaco: na ktorym zakrecie przegrzala sie ktora opona."""
+        raise NotImplementedError
+
+    def tyre_corner_worst(self, corner_no: int, tyre: str, temp: float) -> str:  # pragma: no cover
+        """Analiza: zakret, na ktorym opony grzeja sie najmocniej w sesji."""
         raise NotImplementedError
 
     def finished(self, pos: int, total: int) -> str:  # pragma: no cover

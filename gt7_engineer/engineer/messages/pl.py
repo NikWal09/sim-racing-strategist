@@ -64,6 +64,13 @@ class PolishMessages(Messages):
     def laptime(self, ms: int) -> str:
         return format_laptime_spoken(ms)
 
+    def radio_check(self) -> str:
+        return self._pick(
+            "Radio check. Inżynier na łączach, słyszysz mnie?",
+            "Sprawdzam radio. Jestem z tobą.",
+            "Radio check. Łączność działa.",
+        )
+
     def connected(self) -> str:
         return self._pick(
             "Telemetria połączona. Inżynier na łączach.",
@@ -182,6 +189,22 @@ class PolishMessages(Messages):
             f"Strata {n} sekundy do rekordu.",
         )
 
+    def ref_sector_loss(self, sector: int, seconds: float) -> str:
+        n = self.number(seconds)
+        return self._pick(
+            f"Tracisz {n} sekundy w sektorze {sector} do referencji.",
+            f"Sektor {sector}: strata {n} sekundy do okrążenia referencyjnego.",
+            f"W sektorze {sector} oddajesz {n} sekundy do referencji.",
+        )
+
+    def ref_sector_gain(self, sector: int, seconds: float) -> str:
+        n = self.number(seconds)
+        return self._pick(
+            f"Zyskujesz {n} sekundy do referencji w sektorze {sector}.",
+            f"Sektor {sector}: {n} sekundy szybciej od referencji.",
+            f"Świetny sektor {sector}, {n} sekundy do przodu.",
+        )
+
     def tyre_hot(self, corner: str, temp: float) -> str:
         n = self.number(temp)
         return self._pick(
@@ -194,6 +217,21 @@ class PolishMessages(Messages):
         return self._pick(
             f"Opony najmocniej grzeją się w sekcji {section} z {total}, {corner}, {n} stopni.",
             f"W sekcji {section} z {total} opona {corner} osiąga {n} stopni, pilnuj jej.",
+        )
+
+    def tyre_corner_hot(self, corner_no: int, tyre: str, temp: float) -> str:
+        n = self.number(temp)
+        return self._pick(
+            f"Na zakręcie {corner_no} przegrzałeś oponę {tyre}, {n} stopni.",
+            f"Zakręt {corner_no}: opona {tyre} doszła do {n} stopni, za gorąca.",
+            f"Uwaga, na {corner_no} zakręcie opona {tyre} ma {n} stopni.",
+        )
+
+    def tyre_corner_worst(self, corner_no: int, tyre: str, temp: float) -> str:
+        n = self.number(temp)
+        return self._pick(
+            f"Opony najmocniej grzeją się na zakręcie {corner_no}: {tyre}, około {n} stopni.",
+            f"Najgorętszy dla opon jest zakręt {corner_no}, opona {tyre}, około {n} stopni.",
         )
 
     def finished(self, pos: int, total: int) -> str:

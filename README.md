@@ -81,13 +81,15 @@ brzmi mniej robotycznie. Polskie teksty używają pełnych znaków diakrytycznyc
   szybszego zużycia). Po pierwszym pełnym okrążeniu zaczyna raportować np. „opony
   najmocniej grzeją się w sekcji 7 z 12, prawa przednia". Działa na dowolnym torze,
   bez konfiguracji. Próg zgłaszania ustawia `tyre_section_temp_warning`.
-- **Delta do najlepszego okrążenia.** GT7 nie nadaje gotowej delty ani „dystansu na
-  okrążeniu", ale podaje prędkość co pakiet — to wystarcza. Asystent całkuje prędkość
-  po czasie, żeby znać przejechany dystans, i zapamiętuje najszybsze okrążenie jako
-  referencję (mapa dystans → czas). Na bieżącym kółku, dla aktualnego dystansu,
-  interpoluje z referencji czas i podaje, ile **zyskujesz albo tracisz** względem
-  swojego rekordu (np. „0 przecinek 3 sekundy do przodu"). Działa na dowolnym torze,
-  bez map. Delta jest czytana **tylko na prostej** (duży gaz, wysoka prędkość, mały
+- **Delta do najlepszego okrążenia.** GT7 nie nadaje gotowej delty, ale w każdym
+  pakiecie podaje **pozycję auta w świecie** (x, y, z) — to wystarcza. Asystent
+  zapamiętuje najszybsze okrążenie jako referencyjny ślad: listę próbek
+  (pozycja + czas od startu). Na bieżącym kółku, dla aktualnej pozycji, znajduje
+  najbliższy punkt na śladzie referencyjnym (z rzutem na odcinek dla gładkości) i
+  porównuje czasy — podaje, ile **zyskujesz albo tracisz** względem swojego rekordu
+  w tym samym fizycznym miejscu toru (np. „0 przecinek 3 sekundy do przodu").
+  Porównanie po pozycji nie dryfuje przez okrążenie (w odróżnieniu od całkowania
+  prędkości), więc delta nie skacze. Działa na dowolnym torze, bez map. Delta jest czytana **tylko na prostej** (duży gaz, wysoka prędkość, mały
   kąt kierownicy gdy dostępny w formacie `B`/`~`) i najwyżej raz na prostą, żeby nie
   rozpraszać kierowcy w zakrętach. Najlepsza referencja buduje się po pierwszym
   pełnym, czystym okrążeniu. Próg ciszy ustawia `delta_min_seconds`.
@@ -116,6 +118,41 @@ Uwaga: konsola pamięta pierwszy zamówiony format aż heartbeat wygaśnie. Po z
 [GTPlanet — Overview of GT7 Telemetry Software](https://www.gtplanet.net/forum/threads/overview-of-gt7-telemetry-software.418011/).
 
 ## Uruchomienie
+
+### Interfejs graficzny (GUI)
+
+Są dwie wersje GUI — obie mają te same cztery zakładki i sterują tym samym
+silnikiem (telemetria, inżynier, TTS).
+
+**Wersja ładna (PySide6 / Qt)** — nowoczesna apka desktopowa z ciemnym motywem,
+okrągłymi zegarami prędkości i obrotów, paskiem delty i kolorowanymi
+temperaturami opon. Wymaga jednej dodatkowej instalacji:
+
+```bash
+pip install PySide6
+python gt7_gui_qt.py
+```
+
+**Wersja bez zależności (Tkinter)** — wbudowana w Pythona, zero instalacji,
+prostsza wizualnie. Dobra jako zapas, gdy nie chcesz instalować Qt:
+
+```bash
+python gt7_gui.py
+```
+
+Obie wersje mają cztery zakładki:
+
+- **Inżynier** — przyciski Start/Stop, status połączenia i log zdarzeń na żywo.
+- **Podgląd** — telemetria na żywo: prędkość, bieg, obroty, paliwo, okrążenie,
+  pozycja, czasy okrążeń, temperatury opon i delta do najlepszego okrążenia
+  (zielona = szybciej, czerwona = wolniej).
+- **Ustawienia** — edycja wszystkich opcji z `config.yaml` przez formularz;
+  „Zapisz ustawienia" zapisuje plik, zachowując komentarze. Zmiany wchodzą w
+  życie po kolejnym Starcie.
+- **Test głosów** — odsłuchanie dowolnego komunikatu w wybranym języku (pl/en)
+  i silniku (sapi/edge), bez uruchamiania telemetrii.
+
+### Tryb konsolowy
 
 ```bash
 python main.py
@@ -269,7 +306,9 @@ gt7_engineer/
   speech/
     speaker.py           # kolejka TTS z priorytetami i anti-spamem (SAPI)
     edge_backend.py      # neuronowe głosy edge-tts (online) + routing audio
-main.py                  # spięcie całości
+main.py                  # spięcie całości (tryb konsolowy)
+gt7_gui_qt.py            # ładne GUI (PySide6/Qt): zegary, ciemny motyw, 4 zakładki
+gt7_gui.py               # GUI zapasowe (Tkinter, bez zależności): te same 4 zakładki
 tools/simulator.py       # symulator telemetrii do testów
 tools/voice_demo.py      # interaktywny tester głosów i komunikatów
 tests/test_decoder.py    # testy weryfikacyjne

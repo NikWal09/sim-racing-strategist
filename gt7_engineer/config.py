@@ -3,10 +3,21 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import Any
 
 import yaml
+
+
+def _only_known(dc_type, raw: dict | None) -> dict:
+    """Odsiewa nieznane klucze z config.yaml, by stare/nowe pliki sie nie wywracaly.
+
+    Dzieki temu po zmianie nazw opcji (np. usunieciu stref toru) stary config.yaml
+    nie powoduje bledu - nieznane klucze sa po prostu ignorowane.
+    """
+    raw = raw or {}
+    allowed = {f.name for f in fields(dc_type)}
+    return {k: v for k, v in raw.items() if k in allowed}
 
 
 @dataclass
@@ -31,13 +42,43 @@ class EngineerConfig:
     # Strategia paliwowa: czy starczy do mety, ile oszczedzac, ile dotankowac.
     announce_fuel_strategy: bool = True
     fuel_target_margin_laps: float = 0.5   # zapas paliwa na koniec (w okrazeniach)
-    # Auto-uczenie sekcji toru pod katem przegrzewania opon.
-    announce_tyre_sections: bool = True
-    tyre_sections: int = 12                # na ile sekcji dzielimy okrazenie
-    tyre_section_temp_warning: float = 95.0  # od jakiej temp. raportowac goraca sekcje
+    # Limit gadania o paliwie: inzynier mowi najwyzej tyle komunikatow
+    # paliwowych na okrazenie (najwazniejszy wygrywa: krytyczny > ostrzezenie
+    # > oszczedzanie > reszta). 0 = paliwo calkiem wyciszone.
+    fuel_max_messages_per_lap: int = 1
+    # "Paliwa starczy do mety z zapasem X" - domyslnie wylaczone (gdy paliwa
+    # wystarcza, inzynier po prostu milczy).
+    announce_fuel_ok_to_finish: bool = False
+    # Auto-wykrywanie zakretow pod katem przegrzewania opon (zamiast stref toru).
+    announce_corner_tyres: bool = True
+    corner_temp_warning: float = 95.0      # od jakiej temp. raportowac goracy zakret
     # Delta do najlepszego okrazenia - czytana tylko na prostej (anty-rozpraszanie).
     announce_delta: bool = True
     delta_min_seconds: float = 0.15        # ponizej tej delty (w sek.) nie raportujemy
+    # Okrazenie referencyjne (nagrane kolko z pliku, takze z innego auta):
+    # komunikaty o stracie/zysku per sektor toru.
+    announce_ref_sectors: bool = True
+    ref_sectors: int = 3                   # na ile sektorow dzielic okrazenie
+    ref_sector_min_seconds: float = 0.3    # min. zmiana delty w sektorze, by ja czytac
+    # Podglad paliwa: ktore informacje pokazywac w kafelku "Paliwo".
+    fuel_show_percent: bool = True         # poziom paliwa w % (2 miejsca po przecinku)
+    fuel_show_avg: bool = True             # srednie spalanie na okrazenie
+    fuel_show_laps_left: bool = True       # ile okrazen do konca paliwa
+    fuel_avg_window: int = 3               # z ilu ostatnich okrazen liczyc srednia
+
+
+@dataclass
+class RecordingConfig:
+    """Nagrywanie telemetrii w stylu Garage 61: zapis pelnych okrazen do plikow.
+
+    Kazde poprawne okrazenie laduje w osobnym pliku JSON w katalogu output_dir.
+    Probki zapisujemy z czestotliwoscia sample_hz (GT7 nadaje ~60 Hz, wiec
+    20 Hz wystarcza na gladka linie toru, a plik pozostaje maly).
+    """
+    enabled: bool = True
+    output_dir: str = "recordings"
+    sample_hz: float = 20.0            # ile probek na sekunde zapisywac
+    min_lap_seconds: float = 10.0      # krotsze "okrazenia" odrzucamy (smieci)
 
 
 @dataclass
@@ -63,6 +104,7 @@ class DebugConfig:
 class Config:
     telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
     engineer: EngineerConfig = field(default_factory=EngineerConfig)
+    recording: RecordingConfig = field(default_factory=RecordingConfig)
     speech: SpeechConfig = field(default_factory=SpeechConfig)
     debug: DebugConfig = field(default_factory=DebugConfig)
 
@@ -74,8 +116,9 @@ class Config:
         with open(path, "r", encoding="utf-8") as f:
             raw: dict[str, Any] = yaml.safe_load(f) or {}
         return cls(
-            telemetry=TelemetryConfig(**(raw.get("telemetry") or {})),
-            engineer=EngineerConfig(**(raw.get("engineer") or {})),
-            speech=SpeechConfig(**(raw.get("speech") or {})),
-            debug=DebugConfig(**(raw.get("debug") or {})),
+            telemetry=TelemetryConfig(**_only_known(TelemetryConfig, raw.get("telemetry"))),
+            engineer=EngineerConfig(**_only_known(EngineerConfig, raw.get("engineer"))),
+            recording=RecordingConfig(**_only_known(RecordingConfig, raw.get("recording"))),
+            speech=SpeechConfig(**_only_known(SpeechConfig, raw.get("speech"))),
+            debug=DebugConfig(**_only_known(DebugConfig, raw.get("debug"))),
         )

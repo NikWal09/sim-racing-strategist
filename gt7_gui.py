@@ -44,7 +44,8 @@ if _ROOT not in sys.path:
 from gt7_engineer.config import Config  # noqa: E402
 from gt7_engineer.engineer import RaceEngineer  # noqa: E402
 from gt7_engineer.engineer.messages import load as load_messages  # noqa: E402
-from gt7_engineer.speech import Speaker  # noqa: E402
+from gt7_engineer.speech import Speaker, radio_beep  # noqa: E402
+from gt7_engineer.speech import edge_backend  # noqa: E402
 from gt7_engineer.telemetry import GT7Listener, GT7Packet  # noqa: E402
 
 CONFIG_PATH = os.path.join(_ROOT, "config.yaml")
@@ -74,9 +75,8 @@ SETTINGS_SCHEMA = [
         ("announce_best_lap", "Czytaj najlepsze okrazenie", "bool"),
         ("announce_fuel_strategy", "Strategia paliwowa", "bool"),
         ("fuel_target_margin_laps", "Zapas paliwa na koniec (okrazen)", "float"),
-        ("announce_tyre_sections", "Gorace sekcje toru", "bool"),
-        ("tyre_sections", "Liczba sekcji toru", "int"),
-        ("tyre_section_temp_warning", "Temp. raportowania sekcji (C)", "float"),
+        ("announce_corner_tyres", "Temp. opon na zakretach", "bool"),
+        ("corner_temp_warning", "Temp. ostrzegania na zakrecie (C)", "float"),
         ("announce_delta", "Delta do najlepszego okrazenia", "bool"),
         ("delta_min_seconds", "Prog delty (s)", "float"),
     ]),
@@ -186,6 +186,13 @@ class EngineerRunner(threading.Thread):
 
     def run(self) -> None:
         cfg = self.cfg
+        # Preflight silnika edge: brak pakietow -> powod w logu i powrot do sapi.
+        engine = cfg.speech.engine
+        if engine == "edge":
+            ok, why = edge_backend.check_available()
+            if not ok:
+                self.q.put(("event", f"[GLOS] edge niedostepny: {why}. Przelaczam na sapi."))
+                engine = "sapi"
         speaker = Speaker(
             enabled=cfg.speech.enabled,
             rate=cfg.speech.rate,
@@ -193,12 +200,17 @@ class EngineerRunner(threading.Thread):
             voice_substring=cfg.speech.voice_substring,
             output_device=cfg.speech.output_device,
             min_gap_seconds=cfg.speech.min_gap_seconds,
-            engine=cfg.speech.engine,
+            engine=engine,
             edge_voice=cfg.speech.edge_voice,
             language=cfg.speech.language,
+            error_callback=lambda m: self.q.put(("event", m)),
         )
         speaker.start()
         engineer = RaceEngineer(cfg.engineer, language=cfg.speech.language)
+
+        # Sygnal startowy jak w CrewChief: krotki beep radiowy + "radio check".
+        radio_beep(output_device=cfg.speech.output_device)
+        speaker.say(engineer.M.radio_check(), key="radio_check", min_gap=0)
 
         self.q.put(("status", f"Lacze z konsola {cfg.telemetry.playstation_ip}..."))
         last_tele = 0.0
@@ -254,7 +266,8 @@ def build_samples(M):
         ("Strata pozycji / Lost position", lambda: M.lost_position(5)),
         ("Ostatnie okrazenie / Last lap", lambda: M.last_lap()),
         ("Goraca opona / Tyre hot", lambda: M.tyre_hot(rr, 112.0)),
-        ("Goraca sekcja toru / Tyre section", lambda: M.tyre_section_hot(7, 12, rr, 128.0)),
+        ("Goracy zakret / Corner tyre hot", lambda: M.tyre_corner_hot(3, rr, 122.0)),
+        ("Najgoretszy zakret / Worst corner", lambda: M.tyre_corner_worst(7, rr, 128.0)),
         ("Meta / Finished", lambda: M.finished(1, 16)),
         ("Pozycja / Position", lambda: M.position(4, 16)),
     ]

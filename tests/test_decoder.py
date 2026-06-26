@@ -14,6 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from gt7_engineer.config import EngineerConfig
 from gt7_engineer.engineer import RaceEngineer
 from gt7_engineer.engineer import messages_pl as M
+from gt7_engineer.engineer.corners import CornerTracker
 from gt7_engineer.speech import Priority
 from gt7_engineer.telemetry import decrypt_packet, parse_packet
 from gt7_engineer.telemetry.encoder import build_packet, encrypt_packet
@@ -222,9 +223,14 @@ def test_engineer_language_wiring():
 
 
 def test_fuel_strategy_enough():
-    """Niskie zuzycie + krotki wyscig -> komunikat, ze paliwa starczy do mety."""
+    """Niskie zuzycie + krotki wyscig -> komunikat, ze paliwa starczy do mety.
+
+    Od zmiany "mniej gadania": potwierdzenie 'starczy do mety' jest DOMYSLNIE
+    wylaczone (inzynier milczy, gdy jest dobrze) - test wlacza je w configu.
+    """
     fake = {"t": 0.0}
-    eng = RaceEngineer(EngineerConfig(), clock=lambda: fake["t"])
+    eng = RaceEngineer(EngineerConfig(announce_fuel_ok_to_finish=True),
+                       clock=lambda: fake["t"])
     texts: list[str] = []
     laps_fuel = [(1, 60.0), (2, 58.0), (3, 56.0), (4, 54.0)]
     for i, (lap, fuel) in enumerate(laps_fuel):
@@ -241,9 +247,14 @@ def test_fuel_strategy_enough():
 
 
 def test_fuel_strategy_save_to_finish():
-    """Wysokie zuzycie -> komunikat o oszczedzaniu/dotankowaniu do mety."""
+    """Wysokie zuzycie -> komunikat o oszczedzaniu/dotankowaniu do mety.
+
+    Domyslny limit to 1 komunikat paliwowy na okrazenie (wygrywa ostrzezenie
+    o poziomie) - test podnosi limit, by zobaczyc takze komunikaty strategii.
+    """
     fake = {"t": 0.0}
-    eng = RaceEngineer(EngineerConfig(), clock=lambda: fake["t"])
+    eng = RaceEngineer(EngineerConfig(fuel_max_messages_per_lap=3),
+                       clock=lambda: fake["t"])
     texts: list[str] = []
     # ~12/okr, 20 okrazen, zbiornik 60 -> na pewno nie starczy.
     laps_fuel = [(1, 60.0), (2, 48.0), (3, 36.0)]
@@ -262,41 +273,46 @@ def test_fuel_strategy_save_to_finish():
     print("OK: strategia paliwa - oszczedzanie do mety")
 
 
-def test_tyre_sections_learned():
-    """Po dwoch okrazeniach z gorqca RR w srodku okrazenia -> sekcja z RR."""
-    fake = {"t": 0.0}
-    eng = RaceEngineer(EngineerConfig(), clock=lambda: fake["t"])
-    # Polaczenie (lap 1).
-    _feed(eng, packet_id=0, current_lap=1, on_track=True, speed_mps=50.0,
-          tyre_temp=(80.0, 80.0, 80.0, 80.0))
-    # Lap 1: jazda - tylko pomiar dystansu (binning rusza od lap 2).
-    for i in range(1, 21):
-        fake["t"] = float(i)
-        _feed(eng, packet_id=i, current_lap=1, total_laps=5, on_track=True,
-              speed_mps=50.0, tyre_temp=(80.0, 80.0, 80.0, 80.0))
-    # Wjazd na lap 2 -> ustala dlugosc okrazenia.
-    fake["t"] = 21.0
-    _feed(eng, packet_id=21, current_lap=2, total_laps=5, on_track=True,
-          speed_mps=50.0, tyre_temp=(80.0, 80.0, 80.0, 80.0))
-    # Lap 2: RR przegrzana w srodkowej czesci okrazenia.
-    for i in range(22, 42):
-        fake["t"] = float(i)
-        prog = i - 22
-        rr = 130.0 if 9 <= prog <= 11 else 80.0
-        _feed(eng, packet_id=i, current_lap=2, total_laps=5, on_track=True,
-              speed_mps=50.0, tyre_temp=(80.0, 80.0, 80.0, rr))
-    # Wjazd na lap 3 -> scala dane sekcji z lap 2.
-    fake["t"] = 42.0
-    _feed(eng, packet_id=42, current_lap=3, total_laps=5, on_track=True,
-          speed_mps=50.0, tyre_temp=(80.0, 80.0, 80.0, 80.0))
+def test_corner_tyres_learned():
+    """Okrazenie z dwoma zakretami; na 1. RR sie przegrzewa -> wykryte jako najgoretszy."""
+    trk = CornerTracker()
+    t = 0.0
+    dt = 0.05
+    pos = (0.0, 0.0, 0.0)
+    vel = (50.0, 0.0, 0.0)  # jedziemy "prosto" - skret podajemy katem kierownicy
 
-    res = eng.tyres.hottest_section()
-    assert res is not None, "brak nauczonej sekcji"
-    section, tyre_idx, temp = res
+    def phase(duration, steer, rr_temp, fl_temp=80.0):
+        nonlocal t
+        steps = int(duration / dt)
+        for _ in range(steps):
+            tyres = (fl_temp, 80.0, 80.0, rr_temp)
+            trk.update(pos, vel, 50.0, steer, tyres, t)
+            t += dt
+
+    just = []
+    # Prosta -> zakret 1 (RR goraca) -> prosta -> zakret 2 (chlodno) -> prosta.
+    phase(2.0, 0.0, 80.0)
+    phase(1.5, 0.30, 130.0)            # zakret 1: RR = 130 C
+    jf = trk.pop_just_finished()       # zamkniety dopiero po MIN_EXIT na nastepnej prostej
+    phase(2.0, 0.0, 80.0)
+    just.append(trk.pop_just_finished())
+    phase(1.5, 0.30, 80.0, fl_temp=85.0)  # zakret 2: maks 85 C
+    phase(2.0, 0.0, 80.0)
+    just.append(trk.pop_just_finished())
+    trk.on_lap_complete()
+
+    assert trk.corner_count >= 2, f"za malo zakretow: {trk.corner_count}"
+    res = trk.hottest_corner()
+    assert res is not None, "brak najgoretszego zakretu"
+    corner_no, tyre_idx, temp = res
+    assert corner_no == 1, f"oczekiwano zakretu 1, bylo {corner_no}"
     assert tyre_idx == 3, f"oczekiwano RR(3), bylo {tyre_idx}"
-    assert temp >= 120.0, f"za niska temp sekcji: {temp}"
-    assert 1 <= section <= eng.tyres.n
-    print(f"OK: nauka sekcji opon (sekcja {section}/{eng.tyres.n}, RR, {temp:.0f}C)")
+    assert temp >= 120.0, f"za niska temp zakretu: {temp}"
+    # Feedback "na biezaco" musi zlapac przegrzanie zakretu 1.
+    hot = [j for j in just if j and j[2] >= 120.0]
+    assert hot, f"brak feedbacku o przegrzaniu; zdarzenia: {just}"
+    print(f"OK: wykrywanie zakretow (zakret {corner_no}, RR, {temp:.0f}C, "
+          f"{trk.corner_count} zakretow)")
 
 
 def run_all():
@@ -311,7 +327,7 @@ def run_all():
         test_fuel_strategy_enough,
         test_fuel_strategy_save_to_finish,
         test_tyre_warning_throttled,
-        test_tyre_sections_learned,
+        test_corner_tyres_learned,
     ]
     failed = 0
     for t in tests:

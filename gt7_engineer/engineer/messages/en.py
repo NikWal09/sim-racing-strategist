@@ -47,6 +47,13 @@ class EnglishMessages(Messages):
     def laptime(self, ms: int) -> str:
         return format_laptime_spoken_en(ms)
 
+    def radio_check(self) -> str:
+        return self._pick(
+            "Radio check. Engineer on the radio, do you read me?",
+            "Radio check. I'm with you.",
+            "Radio check. Comms are live.",
+        )
+
     def connected(self) -> str:
         return self._pick(
             "Telemetry connected. Your engineer is on the radio.",
@@ -165,6 +172,20 @@ class EnglishMessages(Messages):
             f"Losing {n} to your best lap.",
         )
 
+    def ref_sector_loss(self, sector: int, seconds: float) -> str:
+        n = self.number(seconds)
+        return self._pick(
+            f"Losing {n} seconds in sector {sector} to the reference.",
+            f"Sector {sector}: {n} seconds down on the reference lap.",
+        )
+
+    def ref_sector_gain(self, sector: int, seconds: float) -> str:
+        n = self.number(seconds)
+        return self._pick(
+            f"Gaining {n} seconds on the reference in sector {sector}.",
+            f"Great sector {sector}, {n} seconds up on the reference.",
+        )
+
     def tyre_hot(self, corner: str, temp: float) -> str:
         n = self.number(temp)
         return self._pick(
@@ -177,6 +198,21 @@ class EnglishMessages(Messages):
         return self._pick(
             f"Tyres run hottest in section {section} of {total}, {corner}, {n} degrees.",
             f"In section {section} of {total} the {corner} tyre hits {n} degrees, mind it.",
+        )
+
+    def tyre_corner_hot(self, corner_no: int, tyre: str, temp: float) -> str:
+        n = self.number(temp)
+        return self._pick(
+            f"In turn {corner_no} you overheated the {tyre} tyre, {n} degrees.",
+            f"Turn {corner_no}: the {tyre} tyre reached {n} degrees, too hot.",
+            f"Careful, in turn {corner_no} the {tyre} tyre hit {n} degrees.",
+        )
+
+    def tyre_corner_worst(self, corner_no: int, tyre: str, temp: float) -> str:
+        n = self.number(temp)
+        return self._pick(
+            f"Tyres run hottest in turn {corner_no}: {tyre}, around {n} degrees.",
+            f"The toughest corner for tyres is turn {corner_no}, {tyre} tyre, about {n} degrees.",
         )
 
     def finished(self, pos: int, total: int) -> str:

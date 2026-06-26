@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+edge-tts
+discord.py[voice]
+PyNaCl
+python-dotenv

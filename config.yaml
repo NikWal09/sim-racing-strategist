@@ -5,11 +5,11 @@ telemetry:
   # IP konsoli PlayStation w sieci LAN (ta, na ktorej dziala GT7).
   # Przy Remote Play gra dalej dziala na konsoli - podaj IP konsoli, nie PC.
   # Sprawdzisz je w PS: Ustawienia -> Siec -> Stan polaczenia -> Adres IP.
-  playstation_ip: "192.168.1.14"
-  send_port: 33739      # port, na ktory wysylamy heartbeat do konsoli
-  receive_port: 33740   # port, na ktorym odbieramy pakiety telemetrii
+  playstation_ip: "192.168.0.130"
+  send_port: 33739  # port, na ktory wysylamy heartbeat do konsoli
+  receive_port: 33740  # port, na ktorym odbieramy pakiety telemetrii
   heartbeat_every: 100  # co ile pakietow ponowic heartbeat (konsola zwykle tnie po ~100)
-  packet_format: "~"    # ktory format telemetrii zamawiac od GT7:
+  packet_format: "~"  # ktory format telemetrii zamawiac od GT7:
                         #   "A" - 296B, podstawowy (paliwo, czasy, opony, pozycja) - DOMYSLNY
                         #   "B" - 316B, + ruch nadwozia (kat kierownicy, sway/heave/surge)
                         #   "~" - 344B, + surowy gaz/hamulec (widac TCS/ABS) i odzysk energii
@@ -18,57 +18,90 @@ telemetry:
 
 engineer:
   # Pojemnosc zbiornika jest czytana z telemetrii, ale mozesz wymusic margines.
-  fuel_warning_laps: 3.0       # ostrzezenie, gdy paliwa zostaje na tyle (lub mniej) okrazen
-  fuel_critical_laps: 1.5      # alarm krytyczny
-  pit_window_laps: 2.0         # info "okno pit-stopu" gdy paliwa na tyle okrazen
-  min_laps_for_fuel_calc: 1    # ile okrazen trzeba przejechac, zanim liczymy zuzycie
+  fuel_warning_laps: 3.0  # ostrzezenie, gdy paliwa zostaje na tyle (lub mniej) okrazen
+  fuel_critical_laps: 1.5  # alarm krytyczny
+  pit_window_laps: 2.0  # info "okno pit-stopu" gdy paliwa na tyle okrazen
+  min_laps_for_fuel_calc: 1  # ile okrazen trzeba przejechac, zanim liczymy zuzycie
 
-  tyre_temp_warning: 110.0     # st. C - ostrzezenie o przegrzanych oponach
-  announce_lap_times: true     # czytaj czas po kazdym okrazeniu
+  tyre_temp_warning: 110.0  # st. C - ostrzezenie o przegrzanych oponach
+  announce_lap_times: false  # czytaj czas po kazdym okrazeniu
   announce_position_changes: true
-  announce_best_lap: true
+  announce_best_lap: false
 
   # Strategia paliwowa: czy paliwa starczy do mety, do ktorego okrazenia,
   # ile oszczedzac na okrazenie i ile procent dotankowac na pit stopie.
   announce_fuel_strategy: true
-  fuel_target_margin_laps: 0.5     # zapas paliwa na koniec wyscigu (w okrazeniach)
+  fuel_target_margin_laps: 0.5  # zapas paliwa na koniec wyscigu (w okrazeniach)
+  # Limit gadania o paliwie: najwyzej tyle komunikatow paliwowych na okrazenie
+  # (najwazniejszy wygrywa: krytyczny > ostrzezenie > oszczedzanie > reszta).
+  # 0 = paliwo calkiem wyciszone. Bonus: "starczy do okrazenia X" nie jest
+  # czytane, gdy X wypada za meta (nic by nie wnosilo).
+  fuel_max_messages_per_lap: 1
+  # "Paliwa starczy do mety z zapasem X" - gdy paliwa wystarcza, inzynier
+  # domyslnie milczy. Ustaw true, jesli chcesz slyszec potwierdzenie.
+  announce_fuel_ok_to_finish: false
 
-  # Auto-uczenie sekcji toru: asystent dzieli okrazenie na sekcje wg pokonanego
-  # dystansu i uczy sie, w ktorej opony grzeja sie najmocniej (ryzyko przegrzania
-  # i szybszego zuzycia). Dziala na dowolnym torze, bez nazw zakretow.
-  announce_tyre_sections: true
-  tyre_sections: 12                # na ile sekcji dzielimy okrazenie
-  tyre_section_temp_warning: 95.0  # od jakiej temp. [C] raportowac goraca sekcje
+  # Wykrywanie zakretow: asystent rozpoznaje prawdziwe zakrety (duzy kat kierownicy
+  # lub szybka zmiana kierunku jazdy + hamowanie), numeruje je na torze i uczy sie,
+  # na ktorym opony grzeja sie najmocniej. Na biezaco mowi "na zakrecie X przegrzales
+  # opone". Dziala na dowolnym torze, bez map i nazw zakretow.
+  announce_corner_tyres: true
+  corner_temp_warning: 95.0  # od jakiej temp. [C] raportowac goracy zakret
 
   # Delta do najlepszego okrazenia: ile czasu tracisz/zyskujesz wzgledem swojego
-  # najszybszego kolka. Liczona z telemetrii (calkowanie predkosci -> dystans,
-  # interpolacja czasu referencyjnego). Czytana TYLKO na prostej, zeby nie
-  # rozpraszac w zakretach. Dziala na dowolnym torze, bez map.
-  announce_delta: true
-  delta_min_seconds: 0.15          # ponizej tej delty [s] nie raportujemy (szum)
+  # najszybszego kolka. Liczona z pozycji auta (x,y,z): zapamietujemy slad
+  # najszybszego okrazenia i porownujemy po najblizszym punkcie sladu (bez dryfu).
+  # Czytana TYLKO na prostej, zeby nie rozpraszac w zakretach. Dziala na dowolnym torze.
+  announce_delta: false
+  delta_min_seconds: 0.15  # ponizej tej delty [s] nie raportujemy (szum)
+
+  # Okrazenie referencyjne: w zakladce Nagrania mozesz ustawic dowolne nagrane
+  # kolko (takze z INNEGO auta) jako referencje. Delta do niego pokazuje sie
+  # w Podgladzie (DELTA REF), a inzynier mowi o stracie/zysku per sektor toru
+  # ("tracisz pol sekundy w sektorze 2").
+  announce_ref_sectors: false
+  ref_sectors: 3  # na ile sektorow (rownych czasowo) dzielic okrazenie
+  ref_sector_min_seconds: 0.3  # min. zmiana delty w sektorze [s], by ja czytac
+
+  # Podglad paliwa: ktore informacje pokazywac w kafelku "Paliwo" (zakladka Podglad).
+  # Mozna wlaczyc dowolna kombinacje - kazda wlaczona pozycja to osobna linia.
+  fuel_show_percent: true  # poziom paliwa w procentach (2 miejsca po przecinku)
+  fuel_show_avg: true  # srednie spalanie na okrazenie (L/okr. lub %/okr. dla EV)
+  fuel_show_laps_left: true  # ile okrazen zostalo do konca paliwa
+  fuel_avg_window: 3  # z ilu ostatnich okrazen liczyc srednie spalanie (X)
+
+recording:
+  # Nagrywanie telemetrii w stylu Garage 61: kazde poprawne okrazenie zapisuje sie
+  # automatycznie do osobnego pliku JSON (auto, tor, gaz, hamulec, kat kierownicy,
+  # pozycja x,y,z - "nitka" na torze). Pozniej odtworzysz je w przegladarce:
+  #   python tools/telemetry_viewer.py   (wygeneruje recordings/telemetria.html)
+  enabled: true
+  output_dir: "recordings"  # katalog na nagrania (wzgledem folderu projektu)
+  sample_hz: 20.0  # ile probek na sekunde zapisywac (20 = gladka linia, maly plik)
+  min_lap_seconds: 10.0  # krotsze "okrazenia" odrzucamy (smieci, np. reset w boksie)
 
 speech:
   enabled: true
-  rate: 175             # tempo mowy (slowa/min). Inzynier mowi rzeczowo, nie za wolno.
-  volume: 1.0           # 0.0 - 1.0
-  voice_substring: ""   # fragment nazwy glosu SAPI do wymuszenia (np. "Paulina", "Zosia").
+  rate: 175  # tempo mowy (slowa/min). Inzynier mowi rzeczowo, nie za wolno.
+  volume: 1.0  # 0.0 - 1.0
+  voice_substring: ""  # fragment nazwy glosu SAPI do wymuszenia (np. "Paulina", "Zosia").
                         # Pusty = glos domyslny systemu. Lista glosow: python -m gt7_engineer.speech.speaker --list
-  output_device: "CABLE Input"    # fragment nazwy urzadzenia WYJSCIA audio dla glosu inzyniera.
+  output_device: "CABLE Input"  # fragment nazwy urzadzenia WYJSCIA audio dla glosu inzyniera.
                         # Pusty = domyslne glosniki. Wpisz np. "CABLE", by skierowac glos
                         # na wirtualny kabel (mikrofon Discorda) i slyszec inzyniera na PS5.
                         # Lista urzadzen: python main.py --list-outputs
-  language: "pl"        # jezyk komunikatow: "pl" (polski) lub "en" (angielski).
+  language: "en"  # jezyk komunikatow: "pl" (polski) lub "en" (angielski).
                         # Dla "en" wybierz tez angielski glos przez voice_substring.
   min_gap_seconds: 1.5  # minimalna przerwa miedzy komunikatami tego samego typu (anti-spam)
 
-  engine: "sapi"        # silnik glosu: "sapi" (offline, Windows) lub "edge" (neuronowy, online).
+  engine: "edge"  # silnik glosu: "sapi" (offline, Windows) lub "edge" (neuronowy, online).
                         #   sapi  - glosy systemowe (pyttsx3/SAPI5), dziala bez internetu.
                         #   edge  - neuronowe glosy Microsoft (edge-tts), najlepsza jakosc,
                         #           wymaga internetu i: pip install edge-tts sounddevice miniaudio numpy
-  edge_voice: ""        # glos dla engine="edge", np. "pl-PL-MarekNeural", "pl-PL-ZofiaNeural",
+  edge_voice: "en-US-RogerNeural"  # glos dla engine="edge", np. "pl-PL-MarekNeural", "pl-PL-ZofiaNeural",
                         # "en-US-AriaNeural". Pusty = domyslny dla jezyka (pl -> Marek, en -> Aria).
                         # Pelna lista glosow: python tools/voice_demo.py --list-edge pl
 
 debug:
-  print_telemetry: true   # wypisuj surowe dane co pakiet (do diagnostyki)
-  log_events: true         # loguj zdarzenia inzyniera na konsole
+  print_telemetry: true  # wypisuj surowe dane co pakiet (do diagnostyki)
+  log_events: true  # loguj zdarzenia inzyniera na konsole

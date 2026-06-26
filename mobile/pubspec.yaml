@@ -1,0 +1,31 @@
+name: gt7_engineer_mobile
+description: Głosowy inżynier wyścigowy GT7 na telefon (Android i iOS).
+publish_to: "none"
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+  flutter: ">=3.19.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  pointycastle: ^3.9.1      # Salsa20 - deszyfrowanie pakietu telemetrii
+  flutter_tts: ^4.0.2       # natywny TTS (polskie glosy)
+  wakelock_plus: ^1.2.5     # ekran nie gasnie podczas jazdy
+  path_provider: ^2.1.4     # katalog na nagrania okrazen
+  # Konta + chmura (ustawienia i wspolna baza nazw torow; telemetria lokalnie).
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.4
+  google_sign_in: ^6.2.1    # logowanie Google (API v6)
+  webview_flutter: ^4.9.0   # podglad telemetrii/raportu opon jako HTML (mobile)
+  url_launcher: ^6.3.0      # otwarcie HTML w przegladarce (desktop fallback)
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true

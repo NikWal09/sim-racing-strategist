@@ -43,6 +43,7 @@ class Speaker:
         engine: str = "sapi",
         edge_voice: str = "",
         language: str = "pl",
+        error_callback=None,
     ) -> None:
         self.enabled = enabled
         self.rate = rate
@@ -54,6 +55,9 @@ class Speaker:
         self.engine = (engine or "sapi").strip().lower()
         self.edge_voice = edge_voice
         self.language = language
+        # Callback (opcjonalny) do raportowania bledow TTS poza stderr - GUI
+        # podpina go, by pokazac problem (np. brak pakietow edge) w logu zdarzen.
+        self.error_callback = error_callback
         self._edge_error_logged = False
 
         self._queue: "queue.PriorityQueue[_Utterance]" = queue.PriorityQueue()
@@ -206,7 +210,13 @@ class Speaker:
                     del engine  # zwolnij instancje, by kolejna byla swieza
             except Exception as e:  # noqa: BLE001
                 # Nie wywracaj watku, ale pokaz problem zamiast cichego znikania.
-                print(f"[TTS] blad silnika mowy: {type(e).__name__}: {e}", file=sys.stderr)
+                msg = f"[TTS] blad silnika mowy: {type(e).__name__}: {e}"
+                print(msg, file=sys.stderr)
+                if self.error_callback is not None:
+                    try:
+                        self.error_callback(msg)
+                    except Exception:  # noqa: BLE001
+                        pass
 
     def _say_edge(self, text: str) -> None:
         """Wypowiada komunikat przez edge-tts (neuronowe glosy online)."""

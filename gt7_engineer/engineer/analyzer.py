@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass
 
 from ..config import EngineerConfig
 from ..speech import Priority
 from ..telemetry import GT7Packet
+from .corners import CornerTracker
 from .delta import DeltaTracker
 from .messages import Messages
 from .messages import load as load_messages
+from .reference import ReferenceDelta, ReferenceInfo
 from .state import SessionState
-from .tyres import TyreSectionTracker
 
 
 @dataclass
@@ -31,6 +33,11 @@ class RaceEngineer:
     # Domyslny odstep [s] dla komunikatow z kluczem, ktore nie podaly wlasnego.
     DEFAULT_MIN_GAP = 2.0
 
+    # Powrot do pit przez menu pauzy: paliwo skacze w gore (dotankowanie) przy
+    # niemal zerowej predkosci. Paliwa nie da sie zyskac jadac - to pewny sygnal.
+    FUEL_REFILL_EPS = 0.05      # min. przyrost paliwa uznany za dotankowanie
+    PIT_RETURN_MAX_KPH = 5.0    # przy tej (lub mniejszej) predkosci uznajemy postoj
+
     def __init__(
         self,
         cfg: EngineerConfig,
@@ -41,11 +48,25 @@ class RaceEngineer:
         self.cfg = cfg
         self.state = SessionState()
         self.M: Messages = messages or load_messages(language)
-        self.tyres = TyreSectionTracker(cfg.tyre_sections)
+        self.corners = CornerTracker()
         self.delta = DeltaTracker(cfg.delta_min_seconds)
+        # Delta do okrazenia referencyjnego (nagrane kolko z pliku, takze z
+        # innego auta). Nieaktywna, dopoki GUI nie wywola set_reference().
+        self.ref_delta = ReferenceDelta(cfg.delta_min_seconds,
+                                        sectors=int(getattr(cfg, "ref_sectors", 3)))
         self._laps_since_fuel_report = 0
         self._last_emit: dict[str, float] = {}
+        self._last_fuel: float | None = None  # paliwo z poprzedniego pakietu (detekcja dotankowania)
+        # Okrazenie z tankowaniem / wjazdem z menu daje NIEPELNA probke zuzycia
+        # (liczylaby tylko odcinek od pitu do linii) - taka probke pomijamy,
+        # inaczej srednia spalania nagle spada po pit stopie.
+        self._fuel_lap_invalid = False
+        # Diagnostyka paliwa: linie do logu GUI/CLI (bez glosu), patrz pop_fuel_debug().
+        self._fuel_debug: list[str] = []
         self._clock = clock  # wstrzykiwalny zegar (ulatwia testy)
+        # Srednie spalanie liczymy z okna ostatnich X okrazen (konfigurowalne).
+        window = max(1, int(getattr(cfg, "fuel_avg_window", 3)))
+        self.state.fuel_per_lap_history = deque(maxlen=window)
 
     def _throttle(self, anns: list[Announcement]) -> list[Announcement]:
         """Odsiewa duplikaty tego samego 'key' czesciej niz co min_gap sekund.
@@ -65,6 +86,29 @@ class RaceEngineer:
                 kept.append(a)
         return kept
 
+    # --- Okrazenie referencyjne ---
+
+    def set_reference(self, path: str) -> ReferenceInfo:
+        """Ustawia nagrane okrazenie (plik JSON recordera) jako referencje.
+
+        Referencja moze pochodzic z INNEGO auta - delta jest pozycyjna, wiec
+        porownanie dwoch pojazdow na tym samym torze dziala wprost.
+        Rzuca ValueError przy niepoprawnym pliku.
+        """
+        info = self.ref_delta.load(path)
+        self.ref_delta.start_lap(self._clock())
+        return info
+
+    def clear_reference(self) -> None:
+        """Usuwa okrazenie referencyjne (DELTA REF znika)."""
+        self.ref_delta.clear()
+
+    def pop_fuel_debug(self) -> list[str]:
+        """Zwraca i czysci linie diagnostyki paliwa (tylko do logu, nie do glosu)."""
+        lines = self._fuel_debug
+        self._fuel_debug = []
+        return lines
+
     def update(self, p: GT7Packet) -> list[Announcement]:
         return self._throttle(self._update(p))
 
@@ -80,9 +124,14 @@ class RaceEngineer:
         elif p.car_code != self.state.car_code:
             self.state.car_code = p.car_code
             self.state.reset()
-            self.tyres.reset()
+            self.corners.reset()
             self.delta.reset()
+            # Referencji z pliku NIE kasujemy - zmiana auta to wlasnie scenariusz
+            # "porownaj dwa pojazdy na tym samym torze". Zerujemy tylko stan kolka.
+            self.ref_delta.reset()
             self.state.connected = False
+            self._last_fuel = None
+            self._fuel_lap_invalid = False
 
         if not p.on_track:
             # Powrot do menu - przy kolejnym wejsciu na tor przywitamy ponownie.
@@ -95,38 +144,85 @@ class RaceEngineer:
             self.state.current_lap = p.current_lap
             self.state.last_position = p.position_in_race
             self.state.best_lap_ms = p.best_lap_ms
-            self.tyres.reset()
-            self.delta.reset()
+            self.corners.reset()
+            # UWAGA: nie resetujemy delty (self.delta.reset()) przy ponownym wejsciu
+            # na tor. Powrot z pit/menu pauzy tez tu trafia - reset kasowalby slad
+            # najlepszego okrazenia i delta przestawala dzialac "jakby nie bylo kolek".
+            # Slad czyscimy tylko przy zmianie auta (powyzej). Tu jedynie zaczynamy
+            # nowe okrazenie, zachowujac referencje, by delta dalej liczyla do best.
+            # WAZNE: bez lap_no/predkosci -> cur_valid=False, wiec to czesciowe
+            # okrazenie (wjazd z menu/pitu w srodku toru) NIE nadpisze referencji.
             self.delta.start_lap(self._clock())
+            self.ref_delta.start_lap(self._clock())
             if p.fuel_capacity > 0:
                 self.state.fuel_at_lap_start = p.current_fuel
+            # Wjazd na tor w srodku okrazenia -> probka zuzycia bylaby niepelna.
+            self._fuel_lap_invalid = True
             out.append(Announcement(self.M.connected(), Priority.NORMAL, key="connected", min_gap=10))
             return out
 
-        # Sledzenie temperatury opon po sekcjach toru i delty (co pakiet).
+        # Sledzenie zakretow (temperatura opon) i delty (co pakiet).
         now = self._clock()
-        self.tyres.update(p.speed_mps, p.tyre_temp, now)
-        self.delta.update(p.speed_mps, now)
+
+        # Powrot do pit przez menu pauzy: paliwo skacze w gore (dotankowanie)
+        # przy niemal zerowej predkosci. Menu pauzy czesto NIE przelacza on_track
+        # i NIE zwieksza licznika okrazen, wiec on_lap_complete sam by nie odpalil
+        # i delta liczylaby od starego punktu startu (nie resetowalaby sie).
+        # Tu wymuszamy nowe okrazenie: zerujemy slad (lap_start_t, _ref_idx).
+        # start_lap bez lap_no -> cur_valid=False, wiec ten out-lap nie nadpisze
+        # referencji (najszybszego kolka). Referencja zostaje nietknieta.
+        if (self._last_fuel is not None and p.fuel_capacity > 0
+                and p.current_fuel > self._last_fuel + self.FUEL_REFILL_EPS
+                and p.speed_kph <= self.PIT_RETURN_MAX_KPH):
+            self.delta.start_lap(now)
+            self.ref_delta.start_lap(now)
+            self.state.fuel_at_lap_start = p.current_fuel
+            # Dotankowanie w srodku okrazenia: zuzycie tego kolka policzyloby sie
+            # tylko od pitu do linii (zanizone) - oznacz probke jako niewazna.
+            self._fuel_lap_invalid = True
+            self._fuel_debug.append(
+                f"[PALIWO] Tankowanie wykryte (paliwo {p.current_fuel:.2f}) - "
+                f"probka zuzycia tego okrazenia zostanie pominieta.")
+        self._last_fuel = p.current_fuel
+
+        self.corners.update(p.position, p.velocity, p.speed_mps,
+                            p.wheel_rotation_rad, p.tyre_temp, now)
+        self.delta.update(p.position, p.speed_mps, now, p.current_lap)
+        if self.ref_delta.loaded:
+            self.ref_delta.update(p.position, p.speed_mps, now, p.current_lap)
 
         out.extend(self._check_lap(p))
         out.extend(self._check_position(p))
         out.extend(self._check_tyres(p))
-        out.extend(self._check_tyre_sections(p))
+        out.extend(self._check_corners(p))
         out.extend(self._check_delta(p))
+        out.extend(self._check_ref_sectors(p))
         return out
 
     # --- Okrazenia + paliwo ---
 
     def _check_lap(self, p: GT7Packet) -> list[Announcement]:
         out: list[Announcement] = []
+
+        # Licznik okrazen cofnal sie (powrot do pit/menu zresetowal numer kolka).
+        # Zsynchronizuj licznik i zacznij nowe okrazenie - inaczej warunek nizej
+        # (current_lap <= state) blokowalby na zawsze reset delty.
+        if p.current_lap < self.state.current_lap:
+            self.state.current_lap = p.current_lap
+            self.delta.start_lap(self._clock())
+            self.ref_delta.start_lap(self._clock())
+            self._fuel_lap_invalid = True   # kolko po resecie licznika = niepelne
+            return out
+
         if p.current_lap <= self.state.current_lap:
             return out
 
         completed_a_timed_lap = self.state.current_lap >= 1
         self.state.current_lap = p.current_lap
-        # Domknij sekcje opon i delte dla zakonczonego okrazenia.
-        self.tyres.on_lap_complete()
-        self.delta.on_lap_complete(p.last_lap_ms, self._clock())
+        # Domknij zakrety i delte dla zakonczonego okrazenia.
+        self.corners.on_lap_complete()
+        self.delta.on_lap_complete(p.last_lap_ms, self._clock(), p.speed_mps, p.current_lap)
+        self.ref_delta.on_lap_complete(p.last_lap_ms, self._clock(), p.speed_mps, p.current_lap)
 
         # Wejscie na ostatnie okrazenie wyscigu.
         if self.cfg.announce_lap_times and p.total_laps > 0 and p.current_lap == p.total_laps:
@@ -161,11 +257,23 @@ class RaceEngineer:
         if p.fuel_capacity <= 0:
             return out  # auto bez paliwa (np. niektore EV raportuja 0)
 
-        # Zuzycie w minionym okrazeniu.
-        if self.state.fuel_at_lap_start is not None:
+        # Zuzycie w minionym okrazeniu. Okrazenie z tankowaniem / wjazdem
+        # z menu / resetem licznika daje NIEPELNA probke - pomijamy ja,
+        # zeby nie psula sredniej spalania (patrz _fuel_lap_invalid).
+        if self.state.fuel_at_lap_start is not None and not self._fuel_lap_invalid:
             used = self.state.fuel_at_lap_start - p.current_fuel
             if used > 0:
                 self.state.fuel_per_lap_history.append(used)
+                self._fuel_debug.append(
+                    f"[PALIWO] Okr. {self.state.current_lap - 1}: zuzycie {used:.3f} "
+                    f"(start {self.state.fuel_at_lap_start:.2f} -> koniec {p.current_fuel:.2f}), "
+                    f"okno {list(round(v, 3) for v in self.state.fuel_per_lap_history)}, "
+                    f"srednia {self.state.avg_fuel_per_lap:.3f}")
+        elif self._fuel_lap_invalid:
+            self._fuel_debug.append(
+                f"[PALIWO] Okr. {self.state.current_lap - 1}: probka zuzycia POMINIETA "
+                f"(pit/menu/reset w trakcie kolka).")
+        self._fuel_lap_invalid = False
         self.state.fuel_at_lap_start = p.current_fuel
 
         avg = self.state.avg_fuel_per_lap
@@ -176,24 +284,35 @@ class RaceEngineer:
 
         self._laps_since_fuel_report += 1
 
+        # Kandydaci na komunikaty - zbierani razem, potem limit na okrazenie
+        # (najwazniejszy wygrywa), zeby inzynier nie zalewal kierowcy paliwem.
+        cands: list[Announcement] = []
+
         if laps_left <= self.cfg.fuel_critical_laps:
-            out.append(Announcement(self.M.fuel_critical(laps_left), Priority.CRITICAL,
-                                    key="fuel", min_gap=8))
+            cands.append(Announcement(self.M.fuel_critical(laps_left), Priority.CRITICAL,
+                                      key="fuel", min_gap=8))
         elif laps_left <= self.cfg.fuel_warning_laps:
-            out.append(Announcement(self.M.fuel_warning(laps_left), Priority.HIGH,
-                                    key="fuel", min_gap=15))
+            cands.append(Announcement(self.M.fuel_warning(laps_left), Priority.HIGH,
+                                      key="fuel", min_gap=15))
         elif laps_left <= self.cfg.pit_window_laps + self.cfg.fuel_warning_laps:
             if self._laps_since_fuel_report >= 2:
                 self._laps_since_fuel_report = 0
-                out.append(Announcement(self.M.fuel_laps_left(laps_left), Priority.LOW, key="fuel"))
+                cands.append(Announcement(self.M.fuel_laps_left(laps_left), Priority.LOW, key="fuel"))
         else:
             if self._laps_since_fuel_report >= 3:
                 self._laps_since_fuel_report = 0
-                out.append(Announcement(self.M.fuel_laps_left(laps_left), Priority.LOW, key="fuel"))
+                cands.append(Announcement(self.M.fuel_laps_left(laps_left), Priority.LOW, key="fuel"))
 
         # Strategia do mety - tylko wyscigi na okreslona liczbe okrazen.
         if self.cfg.announce_fuel_strategy and p.total_laps > 0:
-            out.extend(self._fuel_strategy(p, avg, laps_left))
+            cands.extend(self._fuel_strategy(p, avg, laps_left))
+
+        # Limit: najwyzej N komunikatow paliwowych na okrazenie (Priority to
+        # IntEnum, mniejsza wartosc = wazniejszy; sort jest stabilny, wiec przy
+        # rownych priorytetach zostaje kolejnosc naturalna).
+        limit = max(0, int(getattr(self.cfg, "fuel_max_messages_per_lap", 1)))
+        cands.sort(key=lambda a: a.priority)
+        out.extend(cands[:limit])
         return out
 
     def _fuel_strategy(self, p: GT7Packet, avg: float, laps_left: float) -> list[Announcement]:
@@ -220,13 +339,18 @@ class RaceEngineer:
             if save > 0.01:
                 out.append(Announcement(self.M.fuel_save_per_lap(save), Priority.HIGH,
                                         key="fuel_finish", min_gap=20))
-            out.append(Announcement(self.M.fuel_runs_out(last_full_lap), Priority.NORMAL,
-                                    key="fuel_runs_out", min_gap=25))
+            # "Starczy do okrazenia X" tylko, gdy X faktycznie wypada PRZED meta.
+            # Gdy X >= liczby okrazen wyscigu, komunikat nic nie wnosi
+            # (deficyt dotyczyl tylko marginesu bezpieczenstwa).
+            if last_full_lap < p.total_laps:
+                out.append(Announcement(self.M.fuel_runs_out(last_full_lap), Priority.NORMAL,
+                                        key="fuel_runs_out", min_gap=25))
             if refuel_pct > 1.0:
                 out.append(Announcement(self.M.fuel_refuel_pct(refuel_pct), Priority.LOW,
                                         key="fuel_refuel", min_gap=40))
-        else:
-            # Starczy z zapasem - rzadkie, spokojne potwierdzenie.
+        elif getattr(self.cfg, "announce_fuel_ok_to_finish", False):
+            # Starczy z zapasem - domyslnie milczymy; potwierdzenie tylko gdy
+            # uzytkownik wlaczyl je w konfiguracji.
             margin_laps = (p.current_fuel - race_laps_left * avg) / avg
             if margin_laps > 0:
                 out.append(Announcement(self.M.fuel_ok_to_finish(margin_laps), Priority.LOW,
@@ -288,18 +412,49 @@ class RaceEngineer:
             out.append(Announcement(self.M.delta_behind(d), Priority.LOW, key="delta", min_gap=4))
         return out
 
-    def _check_tyre_sections(self, p: GT7Packet) -> list[Announcement]:
-        """Komunikat o sekcji toru, w ktorej opony grzeja sie najmocniej."""
+    def _check_ref_sectors(self, p: GT7Packet) -> list[Announcement]:
+        """Strata/zysk do okrazenia referencyjnego w wlasnie zamknietym sektorze."""
         out: list[Announcement] = []
-        if not self.cfg.announce_tyre_sections:
+        if not self.ref_delta.loaded:
             return out
-        res = self.tyres.hottest_section()
-        if res is None:
+        res = self.ref_delta.pop_sector_result()
+        if res is None or not getattr(self.cfg, "announce_ref_sectors", True):
             return out
-        section, tyre_idx, temp = res
-        if temp >= self.cfg.tyre_section_temp_warning:
-            out.append(Announcement(
-                self.M.tyre_section_hot(section, self.tyres.n, self.M.corners[tyre_idx], temp),
-                Priority.LOW, key="tyre_section", min_gap=90,
-            ))
+        sector_no, diff = res
+        if abs(diff) < float(getattr(self.cfg, "ref_sector_min_seconds", 0.3)):
+            return out
+        if diff > 0:
+            out.append(Announcement(self.M.ref_sector_loss(sector_no, diff),
+                                    Priority.LOW, key="ref_sector", min_gap=5))
+        else:
+            out.append(Announcement(self.M.ref_sector_gain(sector_no, -diff),
+                                    Priority.LOW, key="ref_sector", min_gap=5))
+        return out
+
+    def _check_corners(self, p: GT7Packet) -> list[Announcement]:
+        """Feedback po zakretach: co wlasnie przegrzales i gdzie grzeje najmocniej."""
+        out: list[Announcement] = []
+        if not self.cfg.announce_corner_tyres:
+            return out
+        warn = self.cfg.corner_temp_warning
+
+        # 1) Na biezaco: zakret wlasnie pokonany - czy doszlo do przegrzania.
+        jf = self.corners.pop_just_finished()
+        if jf is not None:
+            corner_no, tyre_idx, temp = jf
+            if temp >= warn:
+                out.append(Announcement(
+                    self.M.tyre_corner_hot(corner_no, self.M.corners[tyre_idx], temp),
+                    Priority.LOW, key="corner_hot", min_gap=8,
+                ))
+
+        # 2) Analiza sesji: zakret, na ktorym opony grzeja sie najmocniej.
+        res = self.corners.hottest_corner()
+        if res is not None:
+            corner_no, tyre_idx, temp = res
+            if temp >= warn:
+                out.append(Announcement(
+                    self.M.tyre_corner_worst(corner_no, self.M.corners[tyre_idx], temp),
+                    Priority.LOW, key="corner_worst", min_gap=120,
+                ))
         return out

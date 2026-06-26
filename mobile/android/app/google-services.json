@@ -1,0 +1,54 @@
+{
+  "project_info": {
+    "project_number": "629720470529",
+    "project_id": "gt7-engineer",
+    "storage_bucket": "gt7-engineer.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:629720470529:android:d78cdac34fb6273d735c00",
+        "android_client_info": {
+          "package_name": "Gran.Turismo7.Engineer"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "629720470529-esdb9hja6h59v9u9cgq0juan9m536bus.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "Gran.Turismo7.Engineer",
+            "certificate_hash": "56d98f8bed37fbea193eae4942106b75929df0fe"
+          }
+        },
+        {
+          "client_id": "629720470529-p1lmmnviv2bkhgouq7kja4dt59a02i85.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCyurCS0vZAB290OkPm2PXmvBCqHkd5RJw"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "629720470529-p1lmmnviv2bkhgouq7kja4dt59a02i85.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "629720470529-0569c95k3tlrnhjpdmp2e8ita81gq8vd.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "Gran.Turismo7.Engineer"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

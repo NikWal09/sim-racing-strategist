@@ -20,3 +20,6 @@ env/
 logs/
 *.log
 str
+
+# Nagrania telemetrii (lokalne dane kierowcy)
+recordings/

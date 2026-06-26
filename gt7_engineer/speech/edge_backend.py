@@ -28,6 +28,26 @@ def default_voice(language: str) -> str:
     return DEFAULT_VOICES.get(code, DEFAULT_VOICES["pl"])
 
 
+def check_available() -> tuple[bool, str]:
+    """Sprawdza, czy edge-tts da sie uzyc: pakiety syntezy i odtwarzania.
+
+    Zwraca (True, "") gdy wszystko jest, albo (False, komunikat) z lista
+    brakujacych pakietow. Dzieki temu GUI moze pokazac konkretny powod, zamiast
+    cicho nie odtworzyc dzwieku (najczestszy problem: brak sounddevice/miniaudio).
+    """
+    missing: list[str] = []
+    for mod, pkg in (("edge_tts", "edge-tts"), ("sounddevice", "sounddevice"),
+                     ("miniaudio", "miniaudio"), ("numpy", "numpy")):
+        try:
+            __import__(mod)
+        except Exception:  # noqa: BLE001
+            missing.append(pkg)
+    if missing:
+        return False, "brak pakietow: " + ", ".join(missing) + \
+            " (zainstaluj: pip install " + " ".join(missing) + ")"
+    return True, ""
+
+
 def rate_to_pct(rate_wpm: int, baseline: int = 175) -> str:
     """Zamienia tempo z words/min (jak w SAPI) na format procentowy edge-tts."""
     pct = round((rate_wpm - baseline) / baseline * 100)
