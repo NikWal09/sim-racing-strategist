@@ -4,10 +4,16 @@
 /// po zapisaniu nowego okrążenia (controller.recordingsRev) oraz przyciskiem.
 library;
 
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:share_plus/share_plus.dart';
 
 import '../app_settings.dart';
 import '../app_state.dart';
+import '../auth/auth_service.dart';
 import '../engineer/gt7_tracks.dart';
 import '../telemetry/gt7_packet.dart';
 import 'html_view_screen.dart';
@@ -170,6 +176,60 @@ class _RecordingsTabState extends State<RecordingsTab> {
     setState(() {});
   }
 
+  /// Udostępnia plik nagrania przez systemowy share sheet (z nazwą autora).
+  Future<void> _share(Map<String, dynamic> lap) async {
+    final path = lap['_file'] as String?;
+    if (path == null) return;
+    try {
+      final name = AuthService().currentUser?.displayName;
+      final shared = await widget.controller.recordings
+          .exportForShare(path, sharedBy: name);
+      final time = (lap['lap_time'] as String?) ??
+          Gt7Packet.formatLaptime((lap['lap_ms'] ?? 0) as int);
+      await Share.shareXFiles([XFile(shared)],
+          text: '${_t('rec.shareText')}: ${_trackLabel(lap)} · $time');
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  /// Importuje nagranie z pliku JSON od innego użytkownika.
+  Future<void> _import() async {
+    try {
+      // FileType.any zamiast custom('json') - filtr custom nie jest wspierany
+      // na części urządzeń/emulatorów (PlatformException "Unsupported filter").
+      // Poprawność pliku i tak weryfikuje importFromJson.
+      final res = await FilePicker.platform.pickFiles(
+        type: FileType.any,
+        withData: true,
+      );
+      if (res == null || res.files.isEmpty) return;
+      final f = res.files.first;
+      String content;
+      if (f.bytes != null) {
+        content = utf8.decode(f.bytes!);
+      } else if (f.path != null) {
+        content = await File(f.path!).readAsString();
+      } else {
+        return;
+      }
+      await widget.controller.recordings.importFromJson(content);
+      _reload();
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text(_t('rec.importOk'))));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('${_t('rec.importFail')}: $e')));
+      }
+    }
+  }
+
   Future<void> _openViewer(Map<String, dynamic> lap, String time) async {
     final path = lap['_file'] as String?;
     if (path == null) return;
@@ -271,6 +331,11 @@ class _RecordingsTabState extends State<RecordingsTab> {
                     label: Text('${_t('rec.deleteShort')} (${_selected.length})',
                         style: TextStyle(color: cc.danger)),
                   ),
+                TextButton.icon(
+                  onPressed: _import,
+                  icon: const Icon(Icons.file_download_outlined, size: 18),
+                  label: Text(_t('rec.import')),
+                ),
               ],
             ),
           ),
@@ -330,6 +395,10 @@ class _RecordingsTabState extends State<RecordingsTab> {
     final recorded = '${lap['recorded_at'] ?? ''}'.replaceFirst('T', ' ');
     final path = lap['_file'] as String?;
     final checked = path != null && _selected.contains(path);
+    final sharedBy = lap['shared_by'];
+    final extra = lap['imported'] == true
+        ? ' · ${_t('rec.imported')}${sharedBy != null ? ' ${_t('rec.from')} $sharedBy' : ''}'
+        : '';
     return ListTile(
       dense: true,
       leading: Checkbox(
@@ -351,7 +420,7 @@ class _RecordingsTabState extends State<RecordingsTab> {
         ],
       ),
       subtitle: Text(
-        '${_t('rec.lapShort')} ${lap['lap_number']} · ${lap['car_name'] ?? lap['car_code']} · $recorded',
+        '${_t('rec.lapShort')} ${lap['lap_number']} · ${lap['car_name'] ?? lap['car_code']} · $recorded$extra',
         style: TextStyle(color: cc.muted, fontSize: 12),
       ),
       trailing: PopupMenuButton<String>(
@@ -363,6 +432,8 @@ class _RecordingsTabState extends State<RecordingsTab> {
             _nameTrack(lap);
           } else if (v == 'ref') {
             _setRef(lap);
+          } else if (v == 'share') {
+            _share(lap);
           } else if (v == 'delete') {
             _delete(lap);
           }
@@ -371,6 +442,7 @@ class _RecordingsTabState extends State<RecordingsTab> {
           PopupMenuItem(value: 'view', child: Text(_t('rec.viewSingle'))),
           PopupMenuItem(value: 'name', child: Text(_t('rec.nameTrack'))),
           PopupMenuItem(value: 'ref', child: Text(_t('rec.setReference'))),
+          PopupMenuItem(value: 'share', child: Text(_t('rec.share'))),
           PopupMenuItem(value: 'delete', child: Text(_t('rec.delete'))),
         ],
       ),

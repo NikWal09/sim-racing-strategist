@@ -1,6 +1,6 @@
-/// Okragly zegar (CustomPainter) — port klasy CircularGauge z desktopu
-/// (`gt7_gui_qt.py`). Luk otwarty na dole: start w pozycji ~7:30, 270° zgodnie
-/// z ruchem wskazowek przez gore do ~4:30. Opcjonalna czerwona strefa (redline).
+/// Okragly zegar (CustomPainter). Luk otwarty na dole: start ~7:30, 270° przez
+/// gore. Opcjonalna czerwona strefa (redline). Kolory pochodzą ze skórki
+/// dashboardu (przekazywane jawnie), z poświatą (glow) dla skórek neonowych.
 library;
 
 import 'dart:math' as math;
@@ -17,6 +17,12 @@ class CircularGauge extends StatelessWidget {
     required this.max,
     this.color = AppColors.accent,
     this.redlineFrac = 0.0,
+    this.track = AppColors.gaugeTrack,
+    this.tick = AppColors.tick,
+    this.textColor = Colors.white,
+    this.mutedColor = AppColors.muted,
+    this.danger = AppColors.danger,
+    this.glow = false,
   });
 
   final String label;
@@ -24,6 +30,8 @@ class CircularGauge extends StatelessWidget {
   final double max;
   final Color color;
   final double redlineFrac;
+  final Color track, tick, textColor, mutedColor, danger;
+  final bool glow;
 
   @override
   Widget build(BuildContext context) {
@@ -36,6 +44,12 @@ class CircularGauge extends StatelessWidget {
           max: max < 1 ? 1 : max,
           color: color,
           redlineFrac: redlineFrac.clamp(0.0, 1.0),
+          track: track,
+          tick: tick,
+          textColor: textColor,
+          mutedColor: mutedColor,
+          danger: danger,
+          glow: glow,
         ),
       ),
     );
@@ -49,6 +63,12 @@ class _GaugePainter extends CustomPainter {
     required this.max,
     required this.color,
     required this.redlineFrac,
+    required this.track,
+    required this.tick,
+    required this.textColor,
+    required this.mutedColor,
+    required this.danger,
+    required this.glow,
   });
 
   final String label;
@@ -56,10 +76,11 @@ class _GaugePainter extends CustomPainter {
   final double max;
   final Color color;
   final double redlineFrac;
+  final Color track, tick, textColor, mutedColor, danger;
+  final bool glow;
 
-  // Geometria luku (odpowiednik START_ANGLE=225 / FULL_SPAN=-270 z Qt).
-  static const double _start = 135 * math.pi / 180; // ~7:30
-  static const double _sweep = 270 * math.pi / 180; // 270° przez gore
+  static const double _start = 135 * math.pi / 180;
+  static const double _sweep = 270 * math.pi / 180;
   static const double _stroke = 13;
 
   @override
@@ -70,22 +91,18 @@ class _GaugePainter extends CustomPainter {
     final c = Offset(size.width / 2, size.height / 2);
     final rect = Rect.fromCircle(center: c, radius: r);
 
-    // Tlo luku.
     canvas.drawArc(
       rect,
       _start,
       _sweep,
       false,
       Paint()
-        ..color = AppColors.gaugeTrack
+        ..color = track
         ..style = PaintingStyle.stroke
         ..strokeWidth = _stroke
         ..strokeCap = StrokeCap.round,
     );
 
-    // Czerwona strefa (redline) na tle skali. strokeCap.round - żeby koniec
-    // strefy sięgał dokładnie do zaokrąglonego końca łuku tła (inaczej zostaje
-    // szary ogonek za czerwienią).
     if (redlineFrac > 0) {
       canvas.drawArc(
         rect,
@@ -93,16 +110,15 @@ class _GaugePainter extends CustomPainter {
         _sweep * (1 - redlineFrac),
         false,
         Paint()
-          ..color = AppColors.danger.withValues(alpha: 0.5)
+          ..color = danger.withValues(alpha: 0.5)
           ..style = PaintingStyle.stroke
           ..strokeWidth = _stroke
           ..strokeCap = StrokeCap.round,
       );
     }
 
-    // Podzialka: 9 kresek co 1/8 skali.
     final tickPaint = Paint()
-      ..color = AppColors.tick
+      ..color = tick
       ..strokeWidth = 2;
     for (var i = 0; i < 9; i++) {
       final a = _start + _sweep * (i / 8);
@@ -114,39 +130,51 @@ class _GaugePainter extends CustomPainter {
       );
     }
 
-    // Luk wartosci (czerwienieje w strefie redline).
     final frac = (value / max).clamp(0.0, 1.0);
     final inRed = redlineFrac > 0 && frac >= redlineFrac;
+    final arcColor = inRed ? danger : color;
+    if (glow) {
+      canvas.drawArc(
+        rect,
+        _start,
+        _sweep * frac,
+        false,
+        Paint()
+          ..color = arcColor.withValues(alpha: 0.8)
+          ..style = PaintingStyle.stroke
+          ..strokeWidth = _stroke
+          ..strokeCap = StrokeCap.round
+          ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 6),
+      );
+    }
     canvas.drawArc(
       rect,
       _start,
       _sweep * frac,
       false,
       Paint()
-        ..color = inRed ? AppColors.danger : color
+        ..color = arcColor
         ..style = PaintingStyle.stroke
         ..strokeWidth = _stroke
         ..strokeCap = StrokeCap.round,
     );
 
-    // Wartosc (liczba).
     _text(
       canvas,
       value.toStringAsFixed(0),
       c.translate(0, -r * 0.08),
       TextStyle(
-        color: inRed ? const Color(0xFFFF6E63) : Colors.white,
+        color: inRed ? Color.lerp(danger, Colors.white, 0.25) : textColor,
         fontSize: r * 0.42,
         fontWeight: FontWeight.bold,
       ),
     );
 
-    // Etykieta.
     _text(
       canvas,
       label,
       c.translate(0, r * 0.42),
-      const TextStyle(color: AppColors.muted, fontSize: 13),
+      TextStyle(color: mutedColor, fontSize: 13),
     );
   }
 
@@ -165,5 +193,7 @@ class _GaugePainter extends CustomPainter {
       old.max != max ||
       old.color != color ||
       old.redlineFrac != redlineFrac ||
+      old.track != track ||
+      old.glow != glow ||
       old.label != label;
 }

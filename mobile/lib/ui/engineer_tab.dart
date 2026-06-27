@@ -37,6 +37,19 @@ class EngineerTab extends StatelessWidget {
                     label: Text(t('engineer.startPs5')),
                   ),
                   OutlinedButton.icon(
+                    onPressed: (running || controller.isScanning)
+                        ? null
+                        : () => controller.findAndConnect(),
+                    icon: controller.isScanning
+                        ? const SizedBox(
+                            width: 16,
+                            height: 16,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.travel_explore),
+                    label: Text(t('engineer.findConsole')),
+                  ),
+                  OutlinedButton.icon(
                     onPressed: running ? null : () => controller.startDemo(),
                     icon: const Icon(Icons.play_circle_outline),
                     label: Text(t('engineer.demo')),

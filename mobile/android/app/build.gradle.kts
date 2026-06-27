@@ -8,7 +8,8 @@ plugins {
 
 android {
     namespace = "com.example.gt7_engineer_mobile"
-    compileSdk = flutter.compileSdkVersion
+    // file_picker / flutter_plugin_android_lifecycle wymagają compileSdk 36.
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {

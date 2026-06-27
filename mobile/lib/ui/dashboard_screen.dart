@@ -138,7 +138,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 height: 1.0,
                 fontWeight: FontWeight.bold,
                 color: Colors.white)),
-        Text('${p.speedKph.toStringAsFixed(0)}',
+        Text(p.speedKph.toStringAsFixed(0),
             style: const TextStyle(
                 fontSize: 56,
                 fontWeight: FontWeight.bold,

@@ -1,20 +1,24 @@
 /// Zakładka "Podgląd" — KONFIGUROWALNY dashboard.
 ///
-/// Użytkownik układa własne ekrany na siatce 12×8: dodaje widgety z palety,
-/// przeciąga je i skaluje (tryb edycji), tworzy wiele ekranów i przełącza je.
-/// Układy zapisują się lokalnie ([DashboardStore]) per użytkownik. Domyślny
-/// układ odwzorowuje dotychczasowy stały Podgląd.
+/// Tryb podglądu: żywy dashboard z aktywnego ekranu. Tryb edycji (handoff Część 2)
+/// rozdzielony na dwa widoki: BIBLIOTEKĘ widgetów (pełny ekran, kategorie + żywe
+/// miniatury) oraz CANVAS (siatka 12×8 + panel opcji zaznaczonego widgetu).
+/// Układy zapisują się lokalnie ([DashboardStore]) per użytkownik.
 library;
 
 import 'package:flutter/material.dart';
 
 import '../app_settings.dart';
 import '../app_state.dart';
+import '../dashboard/dash_presets.dart';
+import '../dashboard/dash_skin.dart';
 import '../dashboard/dash_widgets.dart';
 import '../dashboard/dashboard_model.dart';
 import '../dashboard/dashboard_store.dart';
 import '../telemetry/gt7_packet.dart';
 import 'theme.dart';
+
+enum _EditView { catalog, canvas }
 
 class PreviewTab extends StatefulWidget {
   const PreviewTab({super.key, required this.controller});
@@ -28,10 +32,13 @@ class PreviewTab extends StatefulWidget {
 class _PreviewTabState extends State<PreviewTab> {
   final _store = DashboardStore();
   DashboardConfig? _cfg;
-  bool _edit = false;
   bool _loading = true;
 
-  // Stan przeciągania/skalowania (w pikselach, zatwierdzany na koniec gestu).
+  bool _edit = false;
+  _EditView _view = _EditView.canvas;
+  int? _selectedId;
+
+  // Stan przeciągania/skalowania (piksele, zatwierdzane na koniec gestu).
   int? _moveId;
   Offset _moveDelta = Offset.zero;
   int? _resizeId;
@@ -48,10 +55,63 @@ class _PreviewTabState extends State<PreviewTab> {
   Future<void> _load() async {
     final cfg = await _store.load(widget.controller.uid);
     if (!mounted) return;
-    setState(() {
-      _cfg = cfg;
-      _loading = false;
-    });
+    _cfg = cfg;
+    _sanitizeOverlaps(); // posprzątaj ewentualne stare nakładki
+    setState(() => _loading = false);
+  }
+
+  /// Usuwa nakładki w zapisanych układach: nachodzący widget przesuwany jest na
+  /// wolne miejsce, a gdy go brak — usuwany. Zapewnia spójny stan po wczytaniu.
+  void _sanitizeOverlaps() {
+    var changed = false;
+    for (final screen in _cfg!.screens) {
+      final placed = <DashWidget>[];
+      bool hits(DashWidget w, int gx, int gy) {
+        for (final o in placed) {
+          if (gx < o.gx + o.gw &&
+              gx + w.gw > o.gx &&
+              gy < o.gy + o.gh &&
+              gy + w.gh > o.gy) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      ({int x, int y})? freeFor(DashWidget w) {
+        for (var y = 0; y <= kGridRows - w.gh; y++) {
+          for (var x = 0; x <= kGridCols - w.gw; x++) {
+            if (!hits(w, x, y)) return (x: x, y: y);
+          }
+        }
+        return null;
+      }
+
+      final keep = <DashWidget>[];
+      for (final w in screen.widgets) {
+        if (!hits(w, w.gx, w.gy)) {
+          placed.add(w);
+          keep.add(w);
+          continue;
+        }
+        final spot = freeFor(w);
+        if (spot != null) {
+          w.gx = spot.x;
+          w.gy = spot.y;
+          placed.add(w);
+          keep.add(w);
+          changed = true;
+        } else {
+          changed = true; // brak miejsca — pomijamy (usuwamy)
+        }
+      }
+      if (keep.length != screen.widgets.length) {
+        screen.widgets
+          ..clear()
+          ..addAll(keep);
+      }
+    }
+    if (changed) _save();
   }
 
   void _save() {
@@ -61,10 +121,21 @@ class _PreviewTabState extends State<PreviewTab> {
 
   DashScreen get _screen => _cfg!.screens[_cfg!.activeIndex];
 
-  // --- Zarządzanie ekranami ---
+  DashWidget? _selectedWidget() {
+    if (_selectedId == null) return null;
+    for (final w in _screen.widgets) {
+      if (w.id == _selectedId) return w;
+    }
+    return null;
+  }
+
+  // --- Ekrany ---
 
   void _switchScreen(int i) {
-    setState(() => _cfg!.activeIndex = i);
+    setState(() {
+      _cfg!.activeIndex = i;
+      _selectedId = null;
+    });
     _save();
   }
 
@@ -74,6 +145,7 @@ class _PreviewTabState extends State<PreviewTab> {
     setState(() {
       _cfg!.screens.add(DashScreen(name: name, widgets: []));
       _cfg!.activeIndex = _cfg!.screens.length - 1;
+      _selectedId = null;
     });
     _save();
   }
@@ -98,25 +170,26 @@ class _PreviewTabState extends State<PreviewTab> {
       if (_cfg!.activeIndex >= _cfg!.screens.length) {
         _cfg!.activeIndex = _cfg!.screens.length - 1;
       }
+      _selectedId = null;
     });
     _save();
   }
 
-  // --- Kolizje (widgety nie mogą się nakładać) ---
+  // --- Kolizje ---
 
   bool _overlaps(int gx, int gy, int gw, int gh, int excludeId) {
     for (final o in _screen.widgets) {
       if (o.id == excludeId) continue;
-      final hit = gx < o.gx + o.gw &&
+      if (gx < o.gx + o.gw &&
           gx + gw > o.gx &&
           gy < o.gy + o.gh &&
-          gy + gh > o.gy;
-      if (hit) return true;
+          gy + gh > o.gy) {
+        return true;
+      }
     }
     return false;
   }
 
-  /// Najbliższe wolne miejsce dla prostokąta gw×gh, startując od (prefX,prefY).
   ({int x, int y})? _findFree(int gw, int gh, int excludeId, int prefX, int prefY) {
     ({int x, int y})? best;
     var bestD = 1 << 30;
@@ -135,141 +208,76 @@ class _PreviewTabState extends State<PreviewTab> {
 
   // --- Widgety ---
 
-  Future<void> _addWidget() async {
-    final type = await showModalBottomSheet<DashWidgetType>(
-      context: context,
-      backgroundColor: AppColors.panel,
-      builder: (_) => SafeArea(
-        child: ListView(
-          shrinkWrap: true,
-          children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-              child: Text(_t('dash.addWidget'),
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w700, color: AppColors.text)),
-            ),
-            for (final t in DashWidgetType.values)
-              ListTile(
-                dense: true,
-                title: Text(dashTypeLabel(t)),
-                onTap: () => Navigator.pop(context, t),
-              ),
-          ],
-        ),
-      ),
-    );
-    if (type == null) return;
-    final size = dashTypeDefaultSize(type);
-    // Zmieść w siatce + znajdź wolne miejsce (bez nakładania).
-    final gw = size.w.clamp(1, kGridCols).toInt();
-    final gh = size.h.clamp(1, kGridRows).toInt();
-    final spot = _findFree(gw, gh, -1, 0, 0);
+  /// Dodaje widget danego typu, zaznacza go i wraca na canvas. Gdy nie ma wolnego
+  /// miejsca — NIE dodaje (żeby nigdy nie powstał nałożony widget) i informuje.
+  void _addType(DashWidgetType type) {
+    final def = dashTypeDefaultSize(type);
+    final min = dashTypeMinSize(type);
+    var gw = def.w.clamp(1, kGridCols).toInt();
+    var gh = def.h.clamp(1, kGridRows).toInt();
+    var spot = _findFree(gw, gh, -1, 0, 0);
     if (spot == null) {
+      // Spróbuj zmieścić w minimalnym rozmiarze.
+      gw = min.w;
+      gh = min.h;
+      spot = _findFree(gw, gh, -1, 0, 0);
+    }
+    if (spot == null) {
+      setState(() => _view = _EditView.canvas);
       _toast(_t('dash.noSpace'));
       return;
     }
+    final s = spot;
+    final id = _cfg!.nextWidgetId();
     setState(() {
-      _screen.widgets.add(DashWidget(
-        id: _cfg!.nextWidgetId(),
-        type: type,
-        gx: spot.x,
-        gy: spot.y,
-        gw: gw,
-        gh: gh,
-      ));
+      _screen.widgets
+          .add(DashWidget(id: id, type: type, gx: s.x, gy: s.y, gw: gw, gh: gh));
+      _selectedId = id;
+      _view = _EditView.canvas;
     });
     _save();
   }
 
   void _removeWidget(int id) {
-    setState(() => _screen.widgets.removeWhere((w) => w.id == id));
+    setState(() {
+      _screen.widgets.removeWhere((w) => w.id == id);
+      if (_selectedId == id) _selectedId = null;
+    });
     _save();
   }
 
-  bool _hasOptions(DashWidgetType t) =>
-      dashTypeVariants(t).isNotEmpty ||
-      dashTypeHasShowValue(t) ||
-      t == DashWidgetType.fuelTarget;
+  void _resizeBy(DashWidget w, int dw, int dh) {
+    final min = dashTypeMinSize(w.type);
+    final nw = (w.gw + dw).clamp(min.w, kGridCols - w.gx).toInt();
+    final nh = (w.gh + dh).clamp(min.h, kGridRows - w.gy).toInt();
+    if (nw == w.gw && nh == w.gh) return;
+    if (!_overlaps(w.gx, w.gy, nw, nh, w.id)) {
+      setState(() {
+        w.gw = nw;
+        w.gh = nh;
+      });
+      _save();
+    } else {
+      _flashBlocked(w.id); // brak miejsca na powiększenie
+    }
+  }
 
-  /// Dialog ustawień pojedynczego widgetu (wariant wyglądu / pokaż liczbę / cel).
-  Future<void> _editOptions(DashWidget w) async {
-    final variants = dashTypeVariants(w.type);
-    final lapsCtrl =
-        TextEditingController(text: '${w.optInt('targetLaps', 5)}');
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setLocal) => AlertDialog(
-          backgroundColor: AppColors.panel,
-          title: Text(dashTypeLabel(w.type)),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              if (variants.isNotEmpty) ...[
-                Text(_t('dash.appearance'),
-                    style: const TextStyle(color: AppColors.muted)),
-                const SizedBox(height: 6),
-                Wrap(
-                  spacing: 8,
-                  children: [
-                    for (final v in variants)
-                      ChoiceChip(
-                        label: Text(dashVariantLabel(v)),
-                        selected: w.optStr('variant', variants.first) == v,
-                        onSelected: (_) =>
-                            setLocal(() => w.options['variant'] = v),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-              ],
-              if (dashTypeHasShowValue(w.type))
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: Text(_t('dash.showValue')),
-                  value: w.optBool(
-                      'showValue', w.type == DashWidgetType.tyres),
-                  onChanged: (v) =>
-                      setLocal(() => w.options['showValue'] = v),
-                ),
-              if (w.type == DashWidgetType.fuelTarget)
-                Row(
-                  children: [
-                    Text(_t('dash.lapsCountLabel')),
-                    const SizedBox(width: 8),
-                    SizedBox(
-                      width: 80,
-                      child: TextField(
-                        controller: lapsCtrl,
-                        keyboardType: TextInputType.number,
-                        decoration:
-                            const InputDecoration(border: OutlineInputBorder()),
-                        onChanged: (s) {
-                          final n = int.tryParse(s);
-                          if (n != null && n > 0) w.options['targetLaps'] = n;
-                        },
-                      ),
-                    ),
-                  ],
-                ),
-            ],
-          ),
-          actions: [
-            FilledButton(
-                onPressed: () => Navigator.pop(ctx),
-                child: Text(_t('common.done'))),
-          ],
-        ),
-      ),
-    );
-    if (!mounted) return;
-    setState(() {});
+  /// Czerwony błysk obrysu, gdy operacji nie da się wykonać (brak miejsca).
+  int? _blockedId;
+  void _flashBlocked(int id) {
+    setState(() => _blockedId = id);
+    Future.delayed(const Duration(milliseconds: 700), () {
+      if (mounted && _blockedId == id) setState(() => _blockedId = null);
+    });
+  }
+
+  void _setLaps(DashWidget w, int d) {
+    final n = (w.optInt('targetLaps', 5) + d).clamp(1, 99).toInt();
+    setState(() => w.options['targetLaps'] = n);
     _save();
   }
 
-  // --- Gesty ---
+  // --- Gesty przeciągania / skalowania ---
 
   void _onMoveEnd(DashWidget w, double cellW, double cellH) {
     final nx = ((w.gx * cellW + _moveDelta.dx) / cellW)
@@ -280,35 +288,37 @@ class _PreviewTabState extends State<PreviewTab> {
         .round()
         .clamp(0, kGridRows - w.gh)
         .toInt();
-    setState(() {
-      if (!_overlaps(nx, ny, w.gw, w.gh, w.id)) {
-        w.gx = nx;
-        w.gy = ny;
+    var blocked = false;
+    if (!_overlaps(nx, ny, w.gw, w.gh, w.id)) {
+      w.gx = nx;
+      w.gy = ny;
+    } else {
+      final free = _findFree(w.gw, w.gh, w.id, nx, ny);
+      if (free != null) {
+        w.gx = free.x;
+        w.gy = free.y;
       } else {
-        // Cel zajęty - przesuń do najbliższego wolnego miejsca (albo zostaw).
-        final free = _findFree(w.gw, w.gh, w.id, nx, ny);
-        if (free != null) {
-          w.gx = free.x;
-          w.gy = free.y;
-        }
+        blocked = true; // nie ma gdzie odłożyć — wraca na miejsce
       }
+    }
+    setState(() {
       _moveId = null;
       _moveDelta = Offset.zero;
     });
     _save();
+    if (blocked) _flashBlocked(w.id);
   }
 
   void _onResizeEnd(DashWidget w, double cellW, double cellH) {
+    final min = dashTypeMinSize(w.type);
     var nw = ((w.gw * cellW + _resizeDelta.dx) / cellW)
         .round()
-        .clamp(1, kGridCols - w.gx)
+        .clamp(min.w, kGridCols - w.gx)
         .toInt();
     var nh = ((w.gh * cellH + _resizeDelta.dy) / cellH)
         .round()
-        .clamp(1, kGridRows - w.gy)
+        .clamp(min.h, kGridRows - w.gy)
         .toInt();
-    // Zmniejszaj, dopóki nowy rozmiar nachodzi na inny widget (oryginalny
-    // rozmiar w oryginalnym miejscu nie koliduje, więc pętla się zatrzyma).
     while ((nw > w.gw || nh > w.gh) && _overlaps(w.gx, w.gy, nw, nh, w.id)) {
       if (nw > w.gw && (nw - w.gw) >= (nh - w.gh)) {
         nw--;
@@ -329,7 +339,7 @@ class _PreviewTabState extends State<PreviewTab> {
     _save();
   }
 
-  // --- Dialogi pomocnicze ---
+  // --- Dialogi ---
 
   Future<String?> _askText(String title, String label, [String initial = '']) {
     final ctrl = TextEditingController(text: initial);
@@ -381,96 +391,334 @@ class _PreviewTabState extends State<PreviewTab> {
     return r ?? false;
   }
 
-  void _toast(String s) => ScaffoldMessenger.of(context)
-      .showSnackBar(SnackBar(content: Text(s)));
+  void _toast(String s) =>
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(s)));
 
-  @override
-  Widget build(BuildContext context) {
-    final Widget body = (_loading || _cfg == null)
-        ? const Center(child: CircularProgressIndicator())
-        : Column(
-            children: [
-              _topBar(),
-              Expanded(
-                child: ListenableBuilder(
-                  listenable: widget.controller,
-                  builder: (context, _) {
-                    final p = widget.controller.last ?? Gt7Packet();
-                    return _grid(p);
-                  },
+  // --- Wybór skórki ---
+
+  void _openSkinPicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.panel,
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setSheet) => SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(_t('dash.skinPicker'),
+                    style: const TextStyle(
+                        color: AppColors.text, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 10,
+                  runSpacing: 10,
+                  children: [
+                    for (final sk in kDashSkins)
+                      _skinTile(sk, () => setSheet(() {})),
+                  ],
                 ),
-              ),
-            ],
-          );
-    // Dashboard zostaje ciemny niezależnie od motywu aplikacji (czytelność).
-    return Theme(
-      data: buildDarkTheme(),
-      child: Container(color: AppColors.bg, child: body),
+              ],
+            ),
+          ),
+        ),
+      ),
     );
   }
 
-  Widget _topBar() {
+  Widget _skinTile(DashSkin sk, VoidCallback onPicked) {
+    final selected = AppSettings.instance.dashSkinId == sk.id;
+    return InkWell(
+      onTap: () {
+        AppSettings.instance.setDashSkin(sk.id);
+        setState(() {}); // odśwież dashboard pod spodem
+        onPicked(); // odśwież zaznaczenie w arkuszu
+      },
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: 150,
+        padding: const EdgeInsets.all(10),
+        decoration: BoxDecoration(
+          color: const Color(0xFF161A21),
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+              color: selected ? AppColors.accent : AppColors.stroke,
+              width: selected ? 2 : 1),
+          boxShadow: selected
+              ? [
+                  BoxShadow(
+                      color: AppColors.accent.withValues(alpha: 0.4),
+                      blurRadius: 10)
+                ]
+              : null,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(children: [
+              _skinDot(sk.speed),
+              _skinDot(sk.rpm),
+              _skinDot(sk.good),
+            ]),
+            const SizedBox(height: 8),
+            Text(sk.name,
+                style: const TextStyle(
+                    color: AppColors.text, fontWeight: FontWeight.w700)),
+            Text(sk.tag,
+                style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _skinDot(Color c) => Container(
+        margin: const EdgeInsets.only(right: 5),
+        width: 14,
+        height: 14,
+        decoration: BoxDecoration(shape: BoxShape.circle, color: c),
+      );
+
+  // --- Presety (gotowe układy) ---
+
+  void _openPresetPicker() {
+    showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: AppColors.panel,
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(_t('dash.presetPicker'),
+                  style: const TextStyle(
+                      color: AppColors.text, fontWeight: FontWeight.w700)),
+              const SizedBox(height: 6),
+              for (final pr in kDashPresets)
+                ListTile(
+                  dense: true,
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.grid_view, color: AppColors.muted),
+                  title: Text(_t(pr.nameKey),
+                      style: const TextStyle(color: AppColors.text)),
+                  subtitle: Text('${pr.widgets.length} widgetów',
+                      style: const TextStyle(
+                          color: AppColors.muted, fontSize: 11)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _addPreset(pr);
+                  },
+                ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  /// Dodaje preset jako NOWY ekran (z świeżymi id), przełącza się na niego.
+  void _addPreset(DashPreset preset) {
+    var nextId = _cfg!.nextWidgetId();
+    final screen = DashScreen(name: _t(preset.nameKey), widgets: []);
+    for (final pw in preset.widgets) {
+      screen.widgets.add(DashWidget(
+        id: nextId++,
+        type: pw.type,
+        gx: pw.gx,
+        gy: pw.gy,
+        gw: pw.gw,
+        gh: pw.gh,
+        options: pw.options == null ? {} : Map<String, dynamic>.of(pw.options!),
+      ));
+    }
+    setState(() {
+      _cfg!.screens.add(screen);
+      _cfg!.activeIndex = _cfg!.screens.length - 1;
+      _selectedId = null;
+    });
+    _save();
+  }
+
+  // =====================================================================
+  //  BUILD
+  // =====================================================================
+
+  @override
+  Widget build(BuildContext context) {
+    final Widget body;
+    if (_loading || _cfg == null) {
+      body = const Center(child: CircularProgressIndicator());
+    } else if (!_edit) {
+      body = Column(children: [
+        _viewTopBar(),
+        Expanded(
+          child: ListenableBuilder(
+            listenable: widget.controller,
+            builder: (context, _) =>
+                _grid(widget.controller.last ?? Gt7Packet(), editing: false),
+          ),
+        ),
+      ]);
+    } else if (_view == _EditView.catalog) {
+      body = _catalog();
+    } else {
+      body = _canvas();
+    }
+    // Dashboard ma własny motyw (ciemny chrome) + tło ze skórki.
+    return Theme(
+      data: buildDarkTheme(),
+      child: _screenBg(body),
+    );
+  }
+
+  /// Tło ekranu wg skórki: gradient albo tekstura włókna węglowego.
+  Widget _screenBg(Widget child) {
+    final s = AppSettings.instance.dashSkin;
+    if (s.carbon) {
+      return Stack(
+        fit: StackFit.expand,
+        children: [
+          const Positioned.fill(
+              child: CustomPaint(painter: DashCarbonPainter(cell: 16))),
+          child,
+        ],
+      );
+    }
+    return DecoratedBox(
+        decoration: BoxDecoration(gradient: s.screen), child: child);
+  }
+
+  // --- Tryb podglądu ---
+
+  Widget _viewTopBar() {
     return Container(
       height: 44,
-      padding: const EdgeInsets.only(left: 46, right: 4), // miejsce na ikonę menu
+      padding: const EdgeInsets.only(left: 46, right: 4),
       child: Row(
         children: [
-          Expanded(
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: [
-                  for (var i = 0; i < _cfg!.screens.length; i++)
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 3),
-                      child: ChoiceChip(
-                        label: Text(_cfg!.screens[i].name),
-                        selected: i == _cfg!.activeIndex,
-                        onSelected: (_) => _switchScreen(i),
-                      ),
-                    ),
-                  if (_edit)
-                    IconButton(
-                      tooltip: _t('dash.newScreen'),
-                      icon: const Icon(Icons.add, color: AppColors.muted),
-                      onPressed: _addScreen,
-                    ),
-                ],
-              ),
-            ),
-          ),
-          if (_edit) ...[
-            IconButton(
-              tooltip: _t('dash.addWidget'),
-              icon: const Icon(Icons.widgets, color: AppColors.accent),
-              onPressed: _addWidget,
-            ),
-            PopupMenuButton<String>(
-              icon: const Icon(Icons.more_vert, color: AppColors.muted),
-              onSelected: (v) {
-                if (v == 'rename') _renameScreen();
-                if (v == 'delete') _deleteScreen();
-              },
-              itemBuilder: (_) => [
-                PopupMenuItem(
-                    value: 'rename', child: Text(_t('dash.renameScreen'))),
-                PopupMenuItem(
-                    value: 'delete', child: Text(_t('dash.deleteScreen'))),
-              ],
-            ),
-          ],
+          Expanded(child: _screenChips()),
           IconButton(
-            tooltip: _edit ? _t('common.done') : _t('dash.tipEdit'),
-            icon: Icon(_edit ? Icons.check : Icons.edit,
-                color: _edit ? AppColors.good : AppColors.muted),
-            onPressed: () => setState(() => _edit = !_edit),
+            tooltip: _t('dash.skin'),
+            icon: const Icon(Icons.palette_outlined, color: AppColors.muted),
+            onPressed: _openSkinPicker,
+          ),
+          IconButton(
+            tooltip: _t('dash.tipEdit'),
+            icon: const Icon(Icons.edit, color: AppColors.muted),
+            onPressed: () => setState(() {
+              _edit = true;
+              _view = _EditView.canvas;
+            }),
           ),
         ],
       ),
     );
   }
 
-  Widget _grid(Gt7Packet p) {
+  Widget _screenChips() {
+    return SingleChildScrollView(
+      scrollDirection: Axis.horizontal,
+      child: Row(
+        children: [
+          for (var i = 0; i < _cfg!.screens.length; i++)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 3),
+              child: ChoiceChip(
+                label: Text(_cfg!.screens[i].name),
+                selected: i == _cfg!.activeIndex,
+                onSelected: (_) => _switchScreen(i),
+              ),
+            ),
+          if (_edit)
+            IconButton(
+              tooltip: _t('dash.newScreen'),
+              icon: const Icon(Icons.add, color: AppColors.muted),
+              onPressed: _addScreen,
+            ),
+        ],
+      ),
+    );
+  }
+
+  // --- CANVAS ---
+
+  Widget _canvas() {
+    final sel = _selectedWidget();
+    return Column(
+      children: [
+        _canvasTopBar(),
+        Expanded(
+          child: Row(
+            children: [
+              Expanded(
+                child: ListenableBuilder(
+                  listenable: widget.controller,
+                  builder: (context, _) =>
+                      _grid(widget.controller.last ?? Gt7Packet(), editing: true),
+                ),
+              ),
+              if (sel != null) _optionsPanel(sel),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _canvasTopBar() {
+    return Container(
+      height: 48,
+      padding: const EdgeInsets.only(left: 46, right: 6),
+      child: Row(
+        children: [
+          Expanded(child: _screenChips()),
+          IconButton(
+            tooltip: _t('dash.skin'),
+            icon: const Icon(Icons.palette_outlined, color: AppColors.muted),
+            onPressed: _openSkinPicker,
+          ),
+          IconButton(
+            tooltip: _t('dash.presets'),
+            icon: const Icon(Icons.dashboard_customize_outlined,
+                color: AppColors.muted),
+            onPressed: _openPresetPicker,
+          ),
+          PopupMenuButton<String>(
+            icon: const Icon(Icons.more_vert, color: AppColors.muted),
+            onSelected: (v) {
+              if (v == 'rename') _renameScreen();
+              if (v == 'delete') _deleteScreen();
+            },
+            itemBuilder: (_) => [
+              PopupMenuItem(value: 'rename', child: Text(_t('dash.renameScreen'))),
+              PopupMenuItem(value: 'delete', child: Text(_t('dash.deleteScreen'))),
+            ],
+          ),
+          const SizedBox(width: 4),
+          FilledButton.icon(
+            onPressed: () => setState(() => _view = _EditView.catalog),
+            icon: const Icon(Icons.add, size: 18),
+            label: Text(_t('dash.addWidget')),
+          ),
+          const SizedBox(width: 4),
+          TextButton(
+            onPressed: () => setState(() {
+              _edit = false;
+              _selectedId = null;
+            }),
+            child: Text(_t('common.done')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _grid(Gt7Packet p, {required bool editing}) {
     return Padding(
       padding: const EdgeInsets.all(6),
       child: LayoutBuilder(
@@ -479,9 +727,14 @@ class _PreviewTabState extends State<PreviewTab> {
           final cellH = cons.maxHeight / kGridRows;
           final children = <Widget>[];
 
-          if (_edit) {
+          if (editing) {
+            // Tło z siatką + odznaczanie po tapnięciu pustego miejsca.
             children.add(Positioned.fill(
-              child: CustomPaint(painter: _GridPainter(cellW, cellH)),
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: () => setState(() => _selectedId = null),
+                child: CustomPaint(painter: _GridPainter(cellW, cellH)),
+              ),
             ));
           }
 
@@ -490,11 +743,11 @@ class _PreviewTabState extends State<PreviewTab> {
             var top = w.gy * cellH;
             var width = w.gw * cellW;
             var height = w.gh * cellH;
-            if (_edit && _moveId == w.id) {
+            if (editing && _moveId == w.id) {
               left += _moveDelta.dx;
               top += _moveDelta.dy;
             }
-            if (_edit && _resizeId == w.id) {
+            if (editing && _resizeId == w.id) {
               width += _resizeDelta.dx;
               height += _resizeDelta.dy;
             }
@@ -503,7 +756,7 @@ class _PreviewTabState extends State<PreviewTab> {
               top: top,
               width: width.clamp(24.0, cons.maxWidth).toDouble(),
               height: height.clamp(24.0, cons.maxHeight).toDouble(),
-              child: _edit ? _editable(w, cellW, cellH, p) : _live(w, p),
+              child: editing ? _canvasCell(w, cellW, cellH, p) : _live(w, p),
             ));
           }
 
@@ -529,12 +782,19 @@ class _PreviewTabState extends State<PreviewTab> {
     );
   }
 
-  Widget _editable(DashWidget w, double cellW, double cellH, Gt7Packet p) {
+  Widget _canvasCell(DashWidget w, double cellW, double cellH, Gt7Packet p) {
+    final selected = w.id == _selectedId;
+    final blocked = w.id == _blockedId;
+    final borderColor = blocked
+        ? AppColors.danger
+        : (selected ? AppColors.accent : AppColors.tileBorder);
     return Stack(
       children: [
         Positioned.fill(
           child: GestureDetector(
+            onTap: () => setState(() => _selectedId = w.id),
             onPanStart: (_) => setState(() {
+              _selectedId = w.id;
               _moveId = w.id;
               _moveDelta = Offset.zero;
             }),
@@ -543,7 +803,9 @@ class _PreviewTabState extends State<PreviewTab> {
             child: Container(
               margin: const EdgeInsets.all(2),
               decoration: BoxDecoration(
-                border: Border.all(color: AppColors.accent, width: 1.5),
+                border: Border.all(
+                    color: borderColor,
+                    width: (selected || blocked) ? 2 : 1),
                 borderRadius: BorderRadius.circular(11),
               ),
               child: IgnorePointer(
@@ -555,62 +817,336 @@ class _PreviewTabState extends State<PreviewTab> {
             ),
           ),
         ),
-        // Usuwanie (lewy górny róg).
+        // Plakietka typu (lewy górny róg).
         Positioned(
-          left: 0,
-          top: 0,
-          child: _miniButton(Icons.close, AppColors.danger,
-              () => _removeWidget(w.id)),
+          left: 4,
+          top: 4,
+          child: IgnorePointer(
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+              decoration: BoxDecoration(
+                color: Colors.black.withValues(alpha: 0.5),
+                borderRadius: BorderRadius.circular(4),
+              ),
+              child: Text(dashTypeLabel(w.type),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(color: AppColors.muted2, fontSize: 9)),
+            ),
+          ),
         ),
-        // Ustawienia widgetu (prawy górny róg) — tylko gdy są jakieś opcje.
-        if (_hasOptions(w.type))
+        // Uchwyt skalowania — tylko dla zaznaczonego.
+        if (selected)
           Positioned(
             right: 0,
-            top: 0,
-            child: _miniButton(
-                Icons.tune, AppColors.accent, () => _editOptions(w)),
-          ),
-        // Uchwyt skalowania (prawy dolny róg).
-        Positioned(
-          right: 0,
-          bottom: 0,
-          child: GestureDetector(
-            onPanStart: (_) => setState(() {
-              _resizeId = w.id;
-              _resizeDelta = Offset.zero;
-            }),
-            onPanUpdate: (d) => setState(() => _resizeDelta += d.delta),
-            onPanEnd: (_) => _onResizeEnd(w, cellW, cellH),
-            child: Container(
-              width: 26,
-              height: 26,
-              decoration: const BoxDecoration(
-                color: AppColors.accent,
-                borderRadius: BorderRadius.only(
-                    topLeft: Radius.circular(8),
-                    bottomRight: Radius.circular(10)),
+            bottom: 0,
+            child: GestureDetector(
+              onPanStart: (_) => setState(() {
+                _resizeId = w.id;
+                _resizeDelta = Offset.zero;
+              }),
+              onPanUpdate: (d) => setState(() => _resizeDelta += d.delta),
+              onPanEnd: (_) => _onResizeEnd(w, cellW, cellH),
+              child: Container(
+                width: 26,
+                height: 26,
+                decoration: const BoxDecoration(
+                  color: AppColors.accent,
+                  borderRadius: BorderRadius.only(
+                      topLeft: Radius.circular(8),
+                      bottomRight: Radius.circular(10)),
+                ),
+                child: const Icon(Icons.open_in_full,
+                    size: 15, color: Colors.white),
               ),
-              child: const Icon(Icons.open_in_full,
-                  size: 15, color: Colors.white),
             ),
+          ),
+      ],
+    );
+  }
+
+  // --- Panel opcji zaznaczonego widgetu ---
+
+  Widget _optionsPanel(DashWidget w) {
+    final variants = dashTypeVariants(w.type);
+    return Container(
+      width: 250,
+      color: AppColors.panel,
+      child: ListView(
+        padding: const EdgeInsets.all(12),
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 9,
+                height: 9,
+                decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Color(dashCategoryColor(w.type))),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(dashTypeLabel(w.type),
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: AppColors.text, fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+          const Divider(color: AppColors.stroke, height: 20),
+          if (variants.isNotEmpty) ...[
+            _panelLabel(_t('dash.appearance')),
+            Wrap(
+              spacing: 6,
+              runSpacing: 6,
+              children: [
+                for (final v in variants)
+                  ChoiceChip(
+                    label: Text(dashVariantLabel(v)),
+                    selected: w.optStr('variant', variants.first) == v,
+                    onSelected: (_) {
+                      setState(() => w.options['variant'] = v);
+                      _save();
+                    },
+                  ),
+              ],
+            ),
+            const SizedBox(height: 12),
+          ],
+          if (dashTypeHasShowValue(w.type))
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              dense: true,
+              title: Text(_t('dash.showValue'),
+                  style: const TextStyle(color: AppColors.text)),
+              value: w.optBool('showValue', w.type == DashWidgetType.tyres),
+              onChanged: (v) {
+                setState(() => w.options['showValue'] = v);
+                _save();
+              },
+            ),
+          if (w.type == DashWidgetType.fuelTarget)
+            _stepperRow(_t('dash.lapsCountLabel'), '${w.optInt('targetLaps', 5)}',
+                () => _setLaps(w, -1), () => _setLaps(w, 1)),
+          const Divider(color: AppColors.stroke, height: 20),
+          _panelLabel(_t('dash.size')),
+          _stepperRow(_t('dash.width'), '${w.gw}', () => _resizeBy(w, -1, 0),
+              () => _resizeBy(w, 1, 0)),
+          _stepperRow(_t('dash.height'), '${w.gh}', () => _resizeBy(w, 0, -1),
+              () => _resizeBy(w, 0, 1)),
+          const SizedBox(height: 10),
+          Text(_t('dash.dragHint'),
+              style: const TextStyle(color: AppColors.muted, fontSize: 11)),
+          const SizedBox(height: 16),
+          OutlinedButton.icon(
+            onPressed: () => _removeWidget(w.id),
+            icon: const Icon(Icons.delete_outline, size: 18),
+            label: Text(_t('dash.deleteWidget')),
+            style: OutlinedButton.styleFrom(
+              foregroundColor: AppColors.danger,
+              side: BorderSide(color: AppColors.danger.withValues(alpha: 0.4)),
+              backgroundColor: AppColors.danger.withValues(alpha: 0.1),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _panelLabel(String s) => Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Text(s.toUpperCase(),
+            style: const TextStyle(
+                color: AppColors.muted, fontSize: 11, letterSpacing: 1.2)),
+      );
+
+  Widget _stepperRow(
+      String label, String value, VoidCallback minus, VoidCallback plus) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label,
+                style: const TextStyle(color: AppColors.muted2, fontSize: 13)),
+          ),
+          _square(Icons.remove, minus),
+          SizedBox(
+            width: 34,
+            child: Text(value,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: AppColors.text, fontWeight: FontWeight.w700)),
+          ),
+          _square(Icons.add, plus),
+        ],
+      ),
+    );
+  }
+
+  Widget _square(IconData icon, VoidCallback onTap) => InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          width: 30,
+          height: 30,
+          decoration: BoxDecoration(
+            color: const Color(0xFF1B212A),
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: AppColors.stroke),
+          ),
+          child: Icon(icon, size: 16, color: AppColors.text),
+        ),
+      );
+
+  // --- BIBLIOTEKA (catalog) ---
+
+  Widget _catalog() {
+    return Column(
+      children: [
+        _catalogHeader(),
+        Expanded(
+          child: LayoutBuilder(
+            builder: (context, cons) {
+              final cols = cons.maxWidth > 760
+                  ? 5
+                  : (cons.maxWidth > 560 ? 4 : 3);
+              final cardW = (cons.maxWidth - 24 - (cols - 1) * 8) / cols;
+              return ListView(
+                padding: const EdgeInsets.all(12),
+                children: [
+                  for (final cat in dashCategories) ...[
+                    Padding(
+                      padding: const EdgeInsets.only(top: 8, bottom: 8),
+                      child: Row(
+                        children: [
+                          Container(
+                            width: 8,
+                            height: 8,
+                            decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Color(cat.color)),
+                          ),
+                          const SizedBox(width: 8),
+                          Text(_t(cat.titleKey).toUpperCase(),
+                              style: const TextStyle(
+                                  color: AppColors.muted,
+                                  fontSize: 11,
+                                  letterSpacing: 1.2,
+                                  fontWeight: FontWeight.w600)),
+                        ],
+                      ),
+                    ),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: [
+                        for (final ty in cat.types)
+                          SizedBox(width: cardW, child: _card(ty)),
+                      ],
+                    ),
+                  ],
+                ],
+              );
+            },
           ),
         ),
       ],
     );
   }
 
-  Widget _miniButton(IconData icon, Color color, VoidCallback onTap) {
-    return GestureDetector(
-      onTap: onTap,
+  Widget _catalogHeader() {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(46, 8, 8, 8),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(_t('dash.libraryTitle'),
+                    style: const TextStyle(
+                        color: AppColors.text,
+                        fontSize: 16,
+                        fontWeight: FontWeight.w700)),
+                Text(_t('dash.librarySubtitle'),
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: AppColors.muted, fontSize: 11)),
+              ],
+            ),
+          ),
+          TextButton.icon(
+            onPressed: () => setState(() => _view = _EditView.canvas),
+            icon: const Icon(Icons.arrow_back, size: 18),
+            label: Text(_t('dash.backToScreen')),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _card(DashWidgetType type) {
+    final variants = dashTypeVariants(type);
+    final size = dashTypeDefaultSize(type);
+    final sample = DashWidget(
+        id: 0, type: type, gx: 0, gy: 0, gw: size.w, gh: size.h);
+    return InkWell(
+      onTap: () => _addType(type),
+      borderRadius: BorderRadius.circular(11),
       child: Container(
-        width: 24,
-        height: 24,
         decoration: BoxDecoration(
-          color: color,
-          borderRadius: const BorderRadius.only(
-              topLeft: Radius.circular(10), bottomRight: Radius.circular(8)),
+          color: AppColors.panel,
+          border: Border.all(color: AppColors.stroke),
+          borderRadius: BorderRadius.circular(11),
         ),
-        child: Icon(icon, size: 15, color: Colors.white),
+        padding: const EdgeInsets.all(6),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            ClipRRect(
+              borderRadius: BorderRadius.circular(7),
+              child: Container(
+                height: 84,
+                decoration: BoxDecoration(
+                    gradient: AppSettings.instance.dashSkin.screen),
+                child: IgnorePointer(
+                  child: buildDashWidget(
+                      sample, sampleDashPacket(), widget.controller),
+                ),
+              ),
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: [
+                Container(
+                  width: 8,
+                  height: 8,
+                  decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: Color(dashCategoryColor(type))),
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(dashTypeLabel(type),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                          color: AppColors.text, fontSize: 12)),
+                ),
+                Text(
+                  variants.length > 1
+                      ? '${variants.length} ${_t('dash.variantsBadge')}'
+                      : '+',
+                  style: const TextStyle(color: AppColors.muted, fontSize: 10),
+                ),
+              ],
+            ),
+          ],
+        ),
       ),
     );
   }
@@ -625,7 +1161,7 @@ class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = AppColors.stroke.withValues(alpha: 0.5)
+      ..color = AppColors.tileBorder.withValues(alpha: 0.35)
       ..strokeWidth = 1;
     for (var x = 0; x <= kGridCols; x++) {
       canvas.drawLine(

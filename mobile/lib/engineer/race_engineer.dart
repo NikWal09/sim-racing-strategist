@@ -10,6 +10,7 @@ import '../messages/messages_pl.dart';
 import '../speech/speaker.dart';
 import '../telemetry/gt7_packet.dart';
 import 'corner_tracker.dart';
+import 'stint_calculator.dart';
 import 'delta_tracker.dart';
 import 'engineer_config.dart';
 import 'session_state.dart';
@@ -261,34 +262,37 @@ class RaceEngineer {
     final raceLapsLeft = p.totalLaps - p.currentLap + 1;
     if (raceLapsLeft <= 0 || avg <= 0) return out;
 
-    final margin = cfg.fuelTargetMarginLaps;
-    final neededWithMargin = (raceLapsLeft + margin) * avg;
-    final deficit = neededWithMargin - p.currentFuel;
+    // Rdzeń obliczeń paliwa wydzielony do StintCalculator (wspólny z ekranem
+    // „Stint"). Tu zostaje tylko kontekst sesji (numer okrążenia) i komunikaty.
+    final plan = StintCalculator.fuel(
+      FuelInput(
+        tankL: p.fuelCapacity,
+        currentL: p.currentFuel,
+        perLapL: avg,
+        lapsRemaining: raceLapsLeft,
+      ),
+      marginLaps: cfg.fuelTargetMarginLaps,
+    );
 
-    if (deficit > 0.01) {
-      final requiredAvg = p.currentFuel / raceLapsLeft;
-      final save = avg - requiredAvg;
+    if (!plan.finishesWithoutPit) {
       var lastFullLap = p.currentLap + lapsLeft.toInt() - 1;
       if (lastFullLap < p.currentLap) lastFullLap = p.currentLap;
-      final refuelPct =
-          p.fuelCapacity > 0 ? 100.0 * deficit / p.fuelCapacity : 0.0;
 
-      if (save > 0.01) {
-        out.add(Announcement(M.fuelSavePerLap(save),
+      if (plan.savePerLapL > 0.01) {
+        out.add(Announcement(M.fuelSavePerLap(plan.savePerLapL),
             priority: Priority.high, key: 'fuel_finish', minGap: 20));
       }
       if (lastFullLap < p.totalLaps) {
         out.add(Announcement(M.fuelRunsOut(lastFullLap),
             priority: Priority.normal, key: 'fuel_runs_out', minGap: 25));
       }
-      if (refuelPct > 1.0) {
-        out.add(Announcement(M.fuelRefuelPct(refuelPct),
+      if (plan.refuelPct > 1.0) {
+        out.add(Announcement(M.fuelRefuelPct(plan.refuelPct),
             priority: Priority.low, key: 'fuel_refuel', minGap: 40));
       }
     } else if (cfg.announceFuelOkToFinish) {
-      final marginLaps = (p.currentFuel - raceLapsLeft * avg) / avg;
-      if (marginLaps > 0) {
-        out.add(Announcement(M.fuelOkToFinish(marginLaps),
+      if (plan.spareLaps > 0) {
+        out.add(Announcement(M.fuelOkToFinish(plan.spareLaps),
             priority: Priority.low, key: 'fuel_finish', minGap: 60));
       }
     }

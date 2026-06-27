@@ -90,14 +90,45 @@ String dashVariantLabel(String variant) =>
   }
 }
 
-/// Czy typ ma alternatywne warianty wyglądu (do dialogu opcji).
+/// Minimalny rozmiar widgetu (w komórkach) — chroni przed zbyt małymi
+/// kafelkami przy zmniejszaniu.
+({int w, int h}) dashTypeMinSize(DashWidgetType t) {
+  switch (t) {
+    case DashWidgetType.speedGauge:
+    case DashWidgetType.rpmGauge:
+    case DashWidgetType.fuel:
+    case DashWidgetType.fuelTarget:
+    case DashWidgetType.tyres:
+    case DashWidgetType.delta:
+    case DashWidgetType.deltaRef:
+      return (w: 2, h: 2);
+    case DashWidgetType.throttle:
+    case DashWidgetType.brake:
+    case DashWidgetType.steering:
+      return (w: 1, h: 2);
+    default:
+      return (w: 1, h: 1);
+  }
+}
+
+/// Czy typ ma alternatywne warianty wyglądu (do dialogu opcji / biblioteki).
+/// Wartości są stałymi stringami (zapis), etykiety idą przez `variant.<klucz>`.
 List<String> dashTypeVariants(DashWidgetType t) {
   switch (t) {
     case DashWidgetType.tyres:
-      return ['liczby', 'kafelki'];
+      return ['kafelki', 'liczby', 'paski'];
     case DashWidgetType.speedGauge:
     case DashWidgetType.rpmGauge:
-      return ['zegar', 'liczba'];
+      return ['zegar', 'liczba', 'pasek'];
+    case DashWidgetType.gear:
+      return ['duzy', 'sugerowany', 'minimal'];
+    case DashWidgetType.delta:
+      return ['pasek', 'liczba'];
+    case DashWidgetType.fuel:
+      return ['ring', 'pasek', 'liczba'];
+    case DashWidgetType.throttle:
+    case DashWidgetType.brake:
+      return ['pionowy', 'poziomy'];
     default:
       return const [];
   }
@@ -108,6 +139,73 @@ bool dashTypeHasShowValue(DashWidgetType t) =>
     t == DashWidgetType.tyres ||
     t == DashWidgetType.throttle ||
     t == DashWidgetType.brake;
+
+/// Kategoria w bibliotece widgetów (handoff Część 2). Kolor to ARGB
+/// (model nie zależy od Fluttera; UI robi Color(color)).
+class DashCategory {
+  const DashCategory(this.titleKey, this.color, this.types);
+  final String titleKey;
+  final int color;
+  final List<DashWidgetType> types;
+}
+
+/// Pełny podział typów na kategorie (każdy typ ma swoją kategorię).
+const List<DashCategory> dashCategories = [
+  DashCategory('cat.speed', 0xFF3D7BFD, [
+    DashWidgetType.speedGauge,
+    DashWidgetType.rpmGauge,
+    DashWidgetType.gear,
+    DashWidgetType.suggestedGear,
+    DashWidgetType.speedNum,
+    DashWidgetType.rpmNum,
+  ]),
+  DashCategory('cat.timing', 0xFF9B6BFF, [
+    DashWidgetType.delta,
+    DashWidgetType.deltaRef,
+    DashWidgetType.lap,
+    DashWidgetType.position,
+    DashWidgetType.lastLap,
+    DashWidgetType.bestLap,
+    DashWidgetType.timeOfDay,
+  ]),
+  DashCategory('cat.inputs', 0xFF5BD17A, [
+    DashWidgetType.throttle,
+    DashWidgetType.brake,
+    DashWidgetType.steering,
+    DashWidgetType.clutch,
+  ]),
+  DashCategory('cat.fuel', 0xFFF4A72A, [
+    DashWidgetType.fuel,
+    DashWidgetType.fuelPerLap,
+    DashWidgetType.fuelLapsLeft,
+    DashWidgetType.fuelMargin,
+    DashWidgetType.fuelTarget,
+  ]),
+  DashCategory('cat.engine', 0xFF38B2AC, [
+    DashWidgetType.tyres,
+    DashWidgetType.waterTemp,
+    DashWidgetType.oilTemp,
+    DashWidgetType.oilPressure,
+    DashWidgetType.boost,
+    DashWidgetType.energyRecovery,
+    DashWidgetType.bodyHeight,
+  ]),
+  DashCategory('cat.indicators', 0xFF8D95A3, [
+    DashWidgetType.indTcs,
+    DashWidgetType.indAsm,
+    DashWidgetType.indHandbrake,
+    DashWidgetType.indRevLimiter,
+    DashWidgetType.indLights,
+  ]),
+];
+
+/// Kolor (ARGB) kategorii, do której należy dany typ.
+int dashCategoryColor(DashWidgetType t) {
+  for (final c in dashCategories) {
+    if (c.types.contains(t)) return c.color;
+  }
+  return 0xFF8D95A3;
+}
 
 class DashWidget {
   DashWidget({

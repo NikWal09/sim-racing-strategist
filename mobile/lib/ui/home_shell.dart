@@ -15,6 +15,7 @@ import 'engineer_tab.dart';
 import 'preview_tab.dart';
 import 'recordings_tab.dart';
 import 'settings_tab.dart';
+import 'stint_tab.dart';
 import 'theme.dart';
 import 'voice_tab.dart';
 
@@ -86,6 +87,7 @@ class _HomeShellState extends State<HomeShell> {
     (icon: Icons.list_alt, label: 'nav.recordings'),
     (icon: Icons.settings, label: 'nav.settings'),
     (icon: Icons.record_voice_over, label: 'nav.voice'),
+    (icon: Icons.local_gas_station, label: 'nav.stint'),
   ];
 
   @override
@@ -96,6 +98,7 @@ class _HomeShellState extends State<HomeShell> {
       RecordingsTab(controller: _controller),
       SettingsTab(controller: _controller),
       const VoiceTab(),
+      StintTab(controller: _controller),
     ];
 
     // Na Podglądzie (index 1) chowamy górny pasek, żeby dashboard miał cały

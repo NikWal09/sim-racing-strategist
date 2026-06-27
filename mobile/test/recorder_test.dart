@@ -35,7 +35,7 @@ List<List<double>> _loop({int n = 40, double r = 200}) =>
 void main() {
   test('out-lap pominiety, mierzone okrazenie zapisane', () {
     final clk = _Clock();
-    final rec = TelemetryRecorder(RecordingConfig(), clock: clk);
+    final rec = TelemetryRecorder(RecordingConfig(), clock: clk.call);
     final pts = _loop();
 
     // Okrazenie wyjazdowe (lap 0).

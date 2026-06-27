@@ -87,4 +87,43 @@ class RecordingStore {
     final f = File(path);
     if (await f.exists()) await f.delete();
   }
+
+  /// Przygotowuje plik nagrania do udostępnienia (share sheet). Dokłada nazwę
+  /// autora ([sharedBy]) i zapisuje czytelnie nazwany plik w katalogu tymczasowym.
+  /// Zwraca ścieżkę pliku do przekazania do Share.shareXFiles.
+  Future<String> exportForShare(String path, {String? sharedBy}) async {
+    final m = jsonDecode(await File(path).readAsString()) as Map<String, dynamic>;
+    if (sharedBy != null && sharedBy.trim().isNotEmpty) {
+      m['shared_by'] = sharedBy.trim();
+    }
+    final tmp = await getTemporaryDirectory();
+    final track = '${m['track_key'] ?? 'tor'}';
+    final ms = '${m['lap_ms'] ?? 0}';
+    final name = 'GT7_${track}_${ms}ms.json'
+        .replaceAll(RegExp(r'[^A-Za-z0-9_.\-]'), '_');
+    final f = File('${tmp.path}/$name');
+    await f.writeAsString(jsonEncode(m));
+    return f.path;
+  }
+
+  /// Importuje nagranie z treści pliku JSON (od innego użytkownika). Waliduje,
+  /// oznacza jako importowane i zapisuje w lokalnej bibliotece. Zwraca ścieżkę.
+  Future<String> importFromJson(String content) async {
+    final m = jsonDecode(content) as Map<String, dynamic>;
+    final channels = m['channels'];
+    final samples = m['samples'];
+    if (channels is! List || samples is! List || samples.isEmpty) {
+      throw const FormatException('To nie jest poprawne nagranie okrążenia.');
+    }
+    m['imported'] = true;
+    final d = await _recordingsDir();
+    final track =
+        '${m['track_key'] ?? 'tor'}'.replaceAll(RegExp(r'[^A-Za-z0-9_\-]'), '_');
+    final ms = m['lap_ms'] ?? 0;
+    final name =
+        'imp_${DateTime.now().millisecondsSinceEpoch}_${track}_${ms}ms.json';
+    final f = File('${d.path}/$name');
+    await f.writeAsString(jsonEncode(m));
+    return f.path;
+  }
 }

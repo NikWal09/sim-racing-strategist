@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'dashboard/dash_skin.dart';
 import 'i18n.dart';
 
 class AppSettings extends ChangeNotifier {
@@ -19,8 +20,12 @@ class AppSettings extends ChangeNotifier {
   ThemeMode themeMode = ThemeMode.system;
   String locale = 'pl'; // 'pl' albo 'en'
   String units = 'metric'; // 'metric' albo 'imperial'
+  String dashSkinId = 'carbon'; // aktywna skórka dashboardu
 
   bool get imperial => units == 'imperial';
+
+  /// Aktywna skórka dashboardu (kolory/gradienty/tekstura).
+  DashSkin get dashSkin => dashSkinById(dashSkinId);
 
   /// Tłumaczenie klucza w aktualnym języku.
   String t(String key) => tr(key, locale);
@@ -43,6 +48,8 @@ class AppSettings extends ChangeNotifier {
       if (l == 'pl' || l == 'en') locale = l; // ręczny wybór ma pierwszeństwo
       final u = '${m['units']}';
       if (u == 'metric' || u == 'imperial') units = u;
+      final sk = '${m['dashSkin']}';
+      if (kDashSkins.any((s) => s.id == sk)) dashSkinId = sk;
     } catch (_) {
       // brak/uszkodzony plik — zostają domyślne (język systemowy)
     }
@@ -57,8 +64,12 @@ class AppSettings extends ChangeNotifier {
   Future<void> _save() async {
     try {
       final f = await _file();
-      await f.writeAsString(jsonEncode(
-          {'themeMode': themeMode.name, 'locale': locale, 'units': units}));
+      await f.writeAsString(jsonEncode({
+        'themeMode': themeMode.name,
+        'locale': locale,
+        'units': units,
+        'dashSkin': dashSkinId,
+      }));
     } catch (_) {}
   }
 
@@ -79,6 +90,13 @@ class AppSettings extends ChangeNotifier {
   void setUnits(String u) {
     if (u == units || (u != 'metric' && u != 'imperial')) return;
     units = u;
+    notifyListeners();
+    _save();
+  }
+
+  void setDashSkin(String id) {
+    if (id == dashSkinId || !kDashSkins.any((s) => s.id == id)) return;
+    dashSkinId = id;
     notifyListeners();
     _save();
   }

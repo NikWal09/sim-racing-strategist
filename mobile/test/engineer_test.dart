@@ -45,14 +45,14 @@ List<List<double>> _loop({int n = 40, double r = 200}) =>
 void main() {
   test('pierwszy pakiet na torze -> komunikat polaczenia', () {
     final clk = _Clock();
-    final eng = RaceEngineer(EngineerConfig(), clock: clk);
+    final eng = RaceEngineer(EngineerConfig(), clock: clk.call);
     final out = eng.update(_pkt(1, 200, 0));
     expect(out, isNotEmpty);
   });
 
   test('mierzone okrazenie -> komunikat czasu (key lap_time)', () {
     final clk = _Clock();
-    final eng = RaceEngineer(EngineerConfig(), clock: clk);
+    final eng = RaceEngineer(EngineerConfig(), clock: clk.call);
     final pts = _loop();
 
     eng.update(_pkt(1, pts[0][0], pts[0][1])); // polaczenie, start okr. 1

@@ -16,8 +16,10 @@ import 'engineer/race_engineer.dart';
 import 'engineer/recording_store.dart';
 import 'engineer/telemetry_recorder.dart';
 import 'engineer/track_labels.dart';
+import 'engineer/tyre_pace_learner.dart';
 import 'messages/messages_pl.dart';
 import 'speech/speaker.dart';
+import 'telemetry/discovery.dart';
 import 'telemetry/gt7_packet.dart';
 import 'telemetry/listener.dart';
 import 'telemetry/simulator.dart';
@@ -171,6 +173,43 @@ class TelemetryController extends ChangeNotifier {
     return left - lapsToFinish;
   }
 
+  // --- Opony (kalkulator stintu) ---
+  // GT7 nie podaje mieszanki/zużycia, więc trzymamy wybór użytkownika i liczymy
+  // okrążenia na komplecie od momentu „montażu" (przycisk Nowe opony).
+  String tyreCompoundId = 'RM';
+  int tyreEstLifeLaps = 14;
+  int _tyreSetStartLap = 0;
+
+  /// Auto-pomiar tempa mieszanek (regresja base + degradacja z czasów okrążeń).
+  final TyrePaceLearner paceLearner = TyrePaceLearner();
+  int _lastSeenLap = -1; // do wykrywania końca okrążenia
+
+  /// Ile okrążeń przejechano na obecnym komplecie opon (z numeru okrążenia sesji).
+  int get tyreLapsOnSet {
+    final lap = _last?.currentLap ?? 0;
+    final d = lap - _tyreSetStartLap;
+    return d > 0 ? d : 0;
+  }
+
+  /// Zamontuj nowy komplet — zeruje licznik od bieżącego okrążenia.
+  void mountTyres() {
+    _tyreSetStartLap = _last?.currentLap ?? 0;
+    notifyListeners();
+  }
+
+  /// Wybór mieszanki (ustawia też domyślną żywotność tej mieszanki).
+  void setTyreCompound(String id, int estLifeLaps) {
+    tyreCompoundId = id;
+    tyreEstLifeLaps = estLifeLaps;
+    notifyListeners();
+  }
+
+  /// Ręczna korekta szacowanej żywotności kompletu.
+  void setTyreEstLife(int laps) {
+    tyreEstLifeLaps = laps > 0 ? laps : 1;
+    notifyListeners();
+  }
+
   bool get refLoaded => refInfo != null;
   double? get refDelta =>
       _engineer.refDelta.loaded ? _engineer.refDelta.currentDelta() : null;
@@ -204,6 +243,35 @@ class TelemetryController extends ChangeNotifier {
     _appendLog('--- Start: tryb demo ---');
     _radioCheck();
     notifyListeners();
+  }
+
+  bool isScanning = false; // trwa auto-wykrywanie konsoli
+
+  /// Auto-wykrywanie konsoli: skanuje sieć, zapisuje znalezione IP i łączy.
+  /// Zwraca true, gdy znaleziono i połączono.
+  Future<bool> findAndConnect() async {
+    if (isRunning || isScanning) return isRunning;
+    isScanning = true;
+    _status = 'Szukam konsoli w sieci...';
+    notifyListeners();
+    try {
+      final ip = await Gt7Discovery.scan(
+        packetFormat: packetFormat,
+        preferIp: playstationIp,
+      );
+      if (ip == null) {
+        _status = 'Nie znaleziono konsoli. Uruchom GT7 i wjedź na tor.';
+        return false;
+      }
+      playstationIp = ip;
+      scheduleSettingsSave();
+      isScanning = false; // odblokuj UI przed właściwym połączeniem
+      await connectPs5(ip: ip);
+      return true;
+    } finally {
+      isScanning = false;
+      notifyListeners();
+    }
   }
 
   Future<void> connectPs5({String? ip, String? format}) async {
@@ -268,6 +336,14 @@ class TelemetryController extends ChangeNotifier {
     _source = src;
     src.packets.listen((p) {
       if (_disposed) return; // pakiet w trakcie sprzątania - ignoruj
+      // Auto-pomiar tempa: na zamknięciu okrążenia (currentLap +1) bierzemy
+      // ostatni czas okrążenia i wiek opony (okrążenia od montażu kompletu).
+      final cur = p.currentLap;
+      if (_lastSeenLap >= 0 && cur == _lastSeenLap + 1 && p.lastLapMs > 0) {
+        final age = (cur - 1) - _tyreSetStartLap;
+        paceLearner.addLap(tyreCompoundId, age, p.lastLapMs / 1000.0);
+      }
+      _lastSeenLap = cur;
       _last = p;
       if (_status.startsWith('Nasłuch')) _status = 'Odbieram dane.';
       // Analiza na żywo -> komunikaty inżyniera.
@@ -299,6 +375,7 @@ class TelemetryController extends ChangeNotifier {
       _source = null;
       _last = null;
       _currentDelta = null;
+      _lastSeenLap = -1; // nowa sesja zacznie pomiar od zera
       _status = 'Zatrzymany.';
       notifyListeners();
     }

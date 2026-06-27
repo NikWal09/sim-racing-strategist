@@ -21,6 +21,8 @@ dependencies:
   google_sign_in: ^6.2.1    # logowanie Google (API v6)
   webview_flutter: ^4.9.0   # podglad telemetrii/raportu opon jako HTML (mobile)
   url_launcher: ^6.3.0      # otwarcie HTML w przegladarce (desktop fallback)
+  share_plus: ^10.1.4       # udostepnianie pliku nagrania (share sheet)
+  file_picker: ^8.1.6       # import pliku nagrania od innego uzytkownika
 
 dev_dependencies:
   flutter_test:
